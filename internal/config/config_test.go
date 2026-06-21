@@ -189,8 +189,60 @@ func TestValidateClientRequired(t *testing.T) {
 	if err := (&Client{}).Validate(); err == nil {
 		t.Fatalf("empty client config must fail")
 	}
-	c := &Client{Endpoint: "h:22", TrustedKeys: []string{"k"}}
+	if err := (&Client{Host: "h", TrustedKeys: []string{"k"}}).Validate(); err == nil {
+		t.Fatalf("client config without sshPort must fail")
+	}
+	if err := (&Client{Host: "h", SSHPort: 22}).Validate(); err == nil {
+		t.Fatalf("client config without trustedKeys must fail")
+	}
+	c := &Client{Host: "h", SSHPort: 22, TrustedKeys: []string{"k"}}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid client config failed: %v", err)
+	}
+	c.HTTPPort = 8080
+	if err := c.Validate(); err != nil {
+		t.Fatalf("client config with httpPort failed: %v", err)
+	}
+}
+
+func TestLoadClientUnvalidatedSkipsRequirements(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	dir := filepath.Join(xdg, "pds", "client")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// An endpoint-only config: no sshPort, no trustedKeys.
+	body := "host: mirror.example.com\nhttpPort: 8080\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Full load enforces the client contract and fails.
+	if _, err := LoadClient(""); err == nil {
+		t.Fatalf("LoadClient should fail without sshPort/trustedKeys")
+	}
+	// Unvalidated load succeeds for endpoint-only use.
+	c, err := LoadClientUnvalidated("")
+	if err != nil {
+		t.Fatalf("LoadClientUnvalidated: %v", err)
+	}
+	if c.Host != "mirror.example.com" || c.HTTPPort != 8080 {
+		t.Errorf("decoded = %+v", c)
+	}
+}
+
+func TestValidateHTTPRequiresAnonymous(t *testing.T) {
+	s := &Server{
+		Listen:         ":1",
+		HTTPListen:     ":8080",
+		AuthorizedKeys: []ClientEntry{{Host: "h", Keys: []string{"k"}}},
+	}
+	if err := s.Validate(); err == nil {
+		t.Fatalf("httpListen without allowAnonymous must fail")
+	}
+	s.AllowAnonymous = true
+	if err := s.Validate(); err != nil {
+		t.Fatalf("httpListen with allowAnonymous should validate: %v", err)
 	}
 }

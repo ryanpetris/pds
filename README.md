@@ -80,6 +80,27 @@ anonymous-read-only only).
 printing a notice to stderr. The fallback fires *only* on a credentials rejection — a
 host-key mismatch (possible MITM) or a network error always aborts, never downgrades.
 
+### HTTP read access
+
+Setting `httpListen` on the server starts a second listener (its own port; SSH is
+untouched) that serves the same buckets **read-only over plain HTTP** — `GET`/`HEAD`
+only, no pushes, no `.self`. Directories return a JSON listing; files stream with `Range`
+support; `<bucket>/.meta` returns the bucket's metadata. This is the anonymous tier over a
+different transport, so `httpListen` **requires `allowAnonymous: true`** (otherwise `pdsd`
+exits at startup).
+
+```
+curl http://pds.example.com:8080/scripts/hello.sh     # a file
+curl http://pds.example.com:8080/scripts              # JSON directory listing
+```
+
+**Security:** HTTP has no host-key pinning and no client authentication, so enabling it
+makes every bucket's contents publicly readable by anyone who can reach the port — a
+deliberate, opt-in downgrade of the read-side guarantees. Writes and host identity remain
+SSH-only. For authenticated/encrypted HTTP, front it with a reverse proxy (TLS is out of
+scope). `pds endpoint --http` prints the `http://host:httpPort` URL when `httpPort` is set
+in the client config.
+
 ## Configuration
 
 Config is loaded systemd-style from three tiers, lowest to highest precedence:
@@ -102,7 +123,9 @@ On-disk keys are camelCase.
 ### `pds` (client) — `pds/client/config.yaml`
 
 ```yaml
-endpoint: pds.example.com:2222   # PDS_ENDPOINT env overrides this
+host: pds.example.com            # name, IPv4, or IPv6 literal (e.g. ::1)
+sshPort: 2222                    # SSH endpoint is host:sshPort; PDS_ENDPOINT env overrides it
+httpPort: 8080                   # optional; only for `pds endpoint --http`
 trustedKeys:                     # pinned server host keys; any match is accepted
   - ssh-ed25519 AAAA... node1    #   (list every node in a cluster + old keys for rotation)
   - ssh-ed25519 AAAA... node2
@@ -114,6 +137,7 @@ identities:                      # optional; defaults to ~/.ssh/id_*
 
 ```yaml
 listen: ":2222"
+httpListen: ":8080"              # optional; read-only HTTP on its own port (requires allowAnonymous)
 execBucket: scripts              # optional; exposed as .pds/exec — MUST be a mode:ro bucket
 allowAnonymous: false            # optional; allow keyless read-only clients (user "anonymous")
 authorizedKeys:               # client public key -> host name
@@ -146,6 +170,7 @@ pds [-config FILE] ls   [path]              # default: root
 pds [-config FILE] push <bucket> [FILE|-]   # default: stdin
 pds [-config FILE] meta <bucket>
 pds [-config FILE] exec <name> [args...]
+pds [-config FILE] endpoint [--http]        # print host:sshPort, or http://host:httpPort
 ```
 
 `pds exec <name> [args...]` pulls `<name>` from the exec bucket, writes it to a temp
@@ -176,6 +201,8 @@ go test ./...
 - By default every connection requires an authorized client key; reads and pushes both
   require it. Enabling `allowAnonymous` opens reads to keyless clients but never writes —
   anonymous connections cannot push and have no host identity.
+- `httpListen` exposes reads over unauthenticated plain HTTP (no host-key pinning); it is
+  read-only and requires `allowAnonymous`. Treat it as making bucket contents public.
 - All paths are confined to their bucket; symlinks that escape are rejected.
 - A pushed file's extension is dictated by the bucket, never the client.
 - Pushes are validated, written to a temp file, and atomically renamed, so a partial

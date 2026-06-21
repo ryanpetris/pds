@@ -5,10 +5,14 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -48,13 +52,20 @@ func genKey(t *testing.T, dir, name string) keypair {
 	return keypair{signer: signer, pubLine: pubLine, pemPath: pemPath}
 }
 
-// harness starts a server and returns the endpoint plus the host/client keys.
+// harness starts a server and returns the SSH endpoint plus the host/client keys.
 func harness(t *testing.T) (endpoint string, host, clientKey keypair, dataDir string) {
 	return harnessWith(t, func(*config.Server) {})
 }
 
 // harnessWith is harness with a hook to tweak the server config before it starts.
 func harnessWith(t *testing.T, tweak func(*config.Server)) (endpoint string, host, clientKey keypair, dataDir string) {
+	srv, host, clientKey, dataDir := newServer(t, tweak)
+	return serveSSH(t, srv), host, clientKey, dataDir
+}
+
+// newServer builds a configured server (two buckets, an exec bucket) without starting any
+// listener, so callers can serve SSH and/or mount the HTTP handler as needed.
+func newServer(t *testing.T, tweak func(*config.Server)) (srv *server.Server, host, clientKey keypair, dataDir string) {
 	t.Helper()
 	keyDir := t.TempDir()
 	dataDir = t.TempDir()
@@ -91,18 +102,39 @@ func harnessWith(t *testing.T, tweak func(*config.Server)) (endpoint string, hos
 	if err != nil {
 		t.Fatal(err)
 	}
+	return srv, host, clientKey, dataDir
+}
+
+// serveSSH starts srv on an ephemeral loopback port and returns the endpoint.
+func serveSSH(t *testing.T, srv *server.Server) string {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
 	go srv.Serve(ln)
-	return ln.Addr().String(), host, clientKey, dataDir
+	return ln.Addr().String()
+}
+
+// clientConfig builds a client config from an endpoint string (host:port).
+func clientConfig(t *testing.T, endpoint string, trusted []string) *config.Client {
+	t.Helper()
+	host, portStr, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &config.Client{Host: host, SSHPort: port, TrustedKeys: trusted}
 }
 
 func dial(t *testing.T, endpoint string, trusted []string, identity string) (*client.Client, error) {
 	t.Helper()
-	cfg := &config.Client{Endpoint: endpoint, TrustedKeys: trusted, Identities: []string{identity}}
+	cfg := clientConfig(t, endpoint, trusted)
+	cfg.Identities = []string{identity}
 	return client.Dial(cfg)
 }
 
@@ -111,8 +143,7 @@ func dial(t *testing.T, endpoint string, trusted []string, identity string) (*cl
 func dialAnon(t *testing.T, endpoint string, trusted []string) (*client.Client, error) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	cfg := &config.Client{Endpoint: endpoint, TrustedKeys: trusted}
-	return client.Dial(cfg)
+	return client.Dial(clientConfig(t, endpoint, trusted))
 }
 
 func TestHappyPath(t *testing.T) {
@@ -263,6 +294,95 @@ func TestAnonymousFallback(t *testing.T) {
 	// Fallback access is read-only.
 	if err := c.Push("metrics", strings.NewReader("a: 1\n")); err == nil {
 		t.Errorf("fallback client should not be able to push")
+	}
+}
+
+// httpGet fetches url and returns the body and status code.
+func httpGet(t *testing.T, url string) (string, int) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b), resp.StatusCode
+}
+
+// Read-only HTTP serves bucket contents on its own port alongside SSH.
+func TestHTTPReadOnly(t *testing.T) {
+	srv, host, clientKey, _ := newServer(t, func(c *config.Server) {
+		c.AllowAnonymous = true
+		c.HTTPListen = ":0"
+	})
+	sshEndpoint := serveSSH(t, srv)
+
+	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { httpLn.Close() })
+	go http.Serve(httpLn, srv.HTTPHandler())
+	base := "http://" + httpLn.Addr().String()
+
+	// File read.
+	if body, code := httpGet(t, base+"/scripts/hello.sh"); code != 200 || !strings.Contains(body, "echo hi") {
+		t.Fatalf("GET hello.sh = %d %q", code, body)
+	}
+
+	// Directory -> JSON listing including the virtual .meta.
+	body, code := httpGet(t, base+"/scripts")
+	if code != 200 {
+		t.Fatalf("GET /scripts = %d", code)
+	}
+	var entries []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(body), &entries); err != nil {
+		t.Fatalf("listing not JSON: %v (%q)", err, body)
+	}
+	names := map[string]bool{}
+	for _, e := range entries {
+		names[e.Name] = true
+	}
+	if !names["hello.sh"] || !names[".meta"] {
+		t.Errorf("listing missing entries: %q", body)
+	}
+
+	// meta document.
+	if body, code := httpGet(t, base+"/metrics/.meta"); code != 200 || !strings.Contains(body, "byHost") {
+		t.Errorf("GET .meta = %d %q", code, body)
+	}
+
+	// .self has no host over HTTP; .push is write-only -> both 404.
+	if _, code := httpGet(t, base+"/metrics/.self/latest.yaml"); code != 404 {
+		t.Errorf(".self code = %d, want 404", code)
+	}
+	if _, code := httpGet(t, base+"/metrics/.push"); code != 404 {
+		t.Errorf(".push code = %d, want 404", code)
+	}
+
+	// Writes are rejected with 405.
+	for _, method := range []string{"POST", "PUT", "DELETE"} {
+		req, _ := http.NewRequest(method, base+"/metrics", strings.NewReader("x"))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 405 {
+			t.Errorf("%s code = %d, want 405", method, resp.StatusCode)
+		}
+	}
+
+	// SSH still works on its own port concurrently.
+	c, err := dial(t, sshEndpoint, []string{host.pubLine}, clientKey.pemPath)
+	if err != nil {
+		t.Fatalf("ssh dial: %v", err)
+	}
+	defer c.Close()
+	if err := c.Push("metrics", strings.NewReader("a: 1\n")); err != nil {
+		t.Fatalf("ssh push: %v", err)
 	}
 }
 

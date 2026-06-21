@@ -6,6 +6,7 @@
 //	pds [-config FILE] push  <bucket> [FILE|-]  # default: stdin
 //	pds [-config FILE] meta  <bucket>
 //	pds [-config FILE] exec  <name> [args...]
+//	pds [-config FILE] endpoint [--http]        # print <host>:<port> (or http URL)
 package main
 
 import (
@@ -47,10 +48,22 @@ func main() {
 	}
 	cmd, rest := args[0], args[1:]
 
+	// endpoint just prints an address; it must not open a connection and needs only the
+	// fields it prints, so it loads without the full client validation (e.g. trustedKeys).
+	if cmd == "endpoint" {
+		cfg, err := config.LoadClientUnvalidated(configPath)
+		if err != nil {
+			fatal("%v", err)
+		}
+		runEndpoint(cfg, rest)
+		return
+	}
+
 	cfg, err := config.LoadClient(configPath)
 	if err != nil {
 		fatal("%v", err)
 	}
+
 	c, err := client.Dial(cfg)
 	if err != nil {
 		fatal("%v", err)
@@ -156,6 +169,31 @@ func runExec(c *client.Client, args []string) {
 	os.Exit(code)
 }
 
+func runEndpoint(cfg *config.Client, args []string) {
+	http := false
+	for _, a := range args {
+		switch a {
+		case "--http", "-http":
+			http = true
+		default:
+			fatal("usage: pds endpoint [--http]")
+		}
+	}
+	if http {
+		u, err := client.ResolveHTTPURL(cfg)
+		if err != nil {
+			fatal("%v", err)
+		}
+		fmt.Println(u)
+		return
+	}
+	ep, err := client.ResolveEndpoint(cfg)
+	if err != nil {
+		fatal("%v", err)
+	}
+	fmt.Println(ep)
+}
+
 func usage() {
 	fmt.Fprint(os.Stderr, `pds — Petris Distribution System client
 
@@ -165,6 +203,7 @@ usage:
   pds [-config FILE] push  <bucket> [FILE|-]  # default: stdin
   pds [-config FILE] meta  <bucket>
   pds [-config FILE] exec  <name> [args...]
+  pds [-config FILE] endpoint [--http]        # print <host>:<port>, or http://<host>:<port>
 `)
 }
 

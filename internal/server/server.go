@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -85,15 +86,54 @@ func New(cfg *config.Server, signers []ssh.Signer) (*Server, error) {
 	}, nil
 }
 
-// ListenAndServe listens on the configured address and serves connections until the
-// listener errors.
+// ListenAndServe listens on the configured address and serves connections until a
+// listener errors. When httpListen is configured it also serves read-only HTTP on that
+// address concurrently; either listener failing tears down the other and returns.
 func (s *Server) ListenAndServe() error {
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return err
 	}
 	log.Printf("pdsd listening on %s", ln.Addr())
-	return s.Serve(ln)
+
+	var hln net.Listener
+	if s.cfg.HTTPListen != "" {
+		hln, err = net.Listen("tcp", s.cfg.HTTPListen)
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		log.Printf("pdsd serving read-only HTTP on %s", hln.Addr())
+	}
+
+	return s.serve(ln, hln)
+}
+
+// serve runs the SSH accept loop on ln and, when hln is non-nil, read-only HTTP on hln.
+// It returns as soon as either stops serving and closes both, so neither listener is left
+// running without the other.
+func (s *Server) serve(ln, hln net.Listener) error {
+	errc := make(chan error, 2)
+	go func() { errc <- s.Serve(ln) }()
+
+	var httpSrv *http.Server
+	if hln != nil {
+		httpSrv = &http.Server{Handler: s.HTTPHandler(), ReadHeaderTimeout: handshakeTimeout}
+		go func() { errc <- httpSrv.Serve(hln) }()
+	}
+
+	err := <-errc
+	ln.Close()
+	if httpSrv != nil {
+		_ = httpSrv.Close()
+	}
+	return err
+}
+
+// HTTPHandler returns the read-only HTTP handler that serves bucket contents as an
+// anonymous client. Exposed so it can be mounted on a listener directly (e.g. in tests).
+func (s *Server) HTTPHandler() http.Handler {
+	return newHTTPHandler(s.cfg)
 }
 
 // Serve accepts and handles connections on ln.

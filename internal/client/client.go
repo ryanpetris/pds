@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/sftp"
@@ -30,15 +31,59 @@ type Client struct {
 // (possible MITM — never fall back) apart from a credentials rejection.
 var errUntrustedHostKey = errors.New("untrusted server host key")
 
+// ResolveEndpoint returns the SSH endpoint to dial as host:port. PDS_ENDPOINT overrides
+// the configured host/sshPort. IPv6 hosts are bracketed via net.JoinHostPort. It errors
+// if neither PDS_ENDPOINT nor a complete host/sshPort is configured.
+func ResolveEndpoint(cfg *config.Client) (string, error) {
+	if v := os.Getenv("PDS_ENDPOINT"); v != "" {
+		return v, nil
+	}
+	if cfg.Host == "" {
+		return "", fmt.Errorf("host is not configured")
+	}
+	if cfg.SSHPort <= 0 {
+		return "", fmt.Errorf("sshPort is not configured")
+	}
+	return net.JoinHostPort(normHost(cfg.Host), strconv.Itoa(cfg.SSHPort)), nil
+}
+
+// ResolveHTTPURL returns the read-only HTTP base URL (http://host:port) for the server,
+// using the configured httpPort. The host follows PDS_ENDPOINT when set so it tracks the
+// SSH dial target. It errors when httpPort or host is not configured.
+func ResolveHTTPURL(cfg *config.Client) (string, error) {
+	if cfg.HTTPPort <= 0 {
+		return "", fmt.Errorf("httpPort is not configured")
+	}
+	host := normHost(cfg.Host)
+	if v := os.Getenv("PDS_ENDPOINT"); v != "" {
+		if h, _, err := net.SplitHostPort(v); err == nil {
+			host = h
+		}
+	}
+	if host == "" {
+		return "", fmt.Errorf("host is not configured")
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(cfg.HTTPPort)), nil
+}
+
+// normHost strips a single surrounding [...] pair so a config host of "[::1]" or "::1"
+// both work; net.JoinHostPort re-adds brackets for IPv6 as needed.
+func normHost(h string) string {
+	if len(h) >= 2 && h[0] == '[' && h[len(h)-1] == ']' {
+		return h[1 : len(h)-1]
+	}
+	return h
+}
+
 // Dial connects to the configured endpoint (PDS_ENDPOINT overrides), verifying the
 // server host key against the trusted pool. It authenticates with the user's SSH
 // identities and, if the server rejects them (or none are available), automatically
 // retries read-only as the anonymous user. A host-key mismatch or network failure is
 // never downgraded — those abort.
 func Dial(cfg *config.Client) (*Client, error) {
-	endpoint := cfg.Endpoint
-	if v := os.Getenv("PDS_ENDPOINT"); v != "" {
-		endpoint = v
+	endpoint, err := ResolveEndpoint(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	trusted, err := sshkeys.TrustedSet(cfg.TrustedKeys)

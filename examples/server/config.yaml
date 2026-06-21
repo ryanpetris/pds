@@ -9,6 +9,11 @@
 
 listen: ":2222"
 
+# Optional. When set, pdsd also serves the buckets read-only over plain HTTP on this
+# address (its own port; SSH is unaffected). HTTP is unauthenticated, so it REQUIRES
+# allowAnonymous: true below — otherwise pdsd exits at startup. Leave unset to disable.
+# httpListen: ":8080"
+
 # Optional. Exposed to clients as the .pds/exec alias and used by `pds exec`.
 # MUST reference a mode:ro bucket, or pdsd exits at startup.
 execBucket: scripts

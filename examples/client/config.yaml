@@ -5,7 +5,14 @@
 #   ~/.config/pds/client/config.yaml        (per-user, highest precedence)
 # Drop-ins in the sibling config.d/ directory override the base file.
 
-endpoint: pds.example.com:2222   # PDS_ENDPOINT overrides this at runtime
+# Server address. host may be a name, IPv4, or IPv6 literal (e.g. ::1). The SSH
+# endpoint is host:sshPort; PDS_ENDPOINT overrides it at runtime.
+host: pds.example.com
+sshPort: 2222
+
+# Optional. Only used by `pds endpoint --http` to print the read-only HTTP URL
+# (http://host:httpPort). Must match the server's httpListen port.
+# httpPort: 8080
 
 # Pinned server host keys. Any match is accepted, so list every node in a
 # cluster (each with its own locally generated key) and keep old keys here

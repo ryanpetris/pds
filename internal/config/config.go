@@ -51,9 +51,12 @@ const (
 // key auth and keep their host identity.
 const AnonymousUser = "anonymous"
 
-// Client is the pds configuration.
+// Client is the pds configuration. The server is addressed by separate host and port
+// fields; httpPort is optional and only used to build read URLs (pds endpoint --http).
 type Client struct {
-	Endpoint    string   `yaml:"endpoint"`
+	Host        string   `yaml:"host"`
+	SSHPort     int      `yaml:"sshPort"`
+	HTTPPort    int      `yaml:"httpPort"`
 	TrustedKeys []string `yaml:"trustedKeys"`
 	Identities  []string `yaml:"identities"`
 }
@@ -61,6 +64,7 @@ type Client struct {
 // Server is the pdsd configuration.
 type Server struct {
 	Listen         string            `yaml:"listen"`
+	HTTPListen     string            `yaml:"httpListen"`
 	AuthorizedKeys []ClientEntry     `yaml:"authorizedKeys"`
 	AllowAnonymous bool              `yaml:"allowAnonymous"`
 	ExecBucket     string            `yaml:"execBucket"`
@@ -87,8 +91,11 @@ type Bucket struct {
 // Writable reports whether the bucket accepts pushes.
 func (b Bucket) Writable() bool { return strings.EqualFold(b.Mode, "rw") }
 
-// LoadClient loads and validates the pds configuration.
-func LoadClient(override string) (*Client, error) {
+// LoadClientUnvalidated loads the pds configuration without enforcing the full client
+// contract. It is for commands (e.g. pds endpoint) that need only a subset of fields and
+// should not require a usable SSH setup such as trustedKeys. Unknown keys are still
+// rejected.
+func LoadClientUnvalidated(override string) (*Client, error) {
 	merged, err := loadMerged(RoleClient, override)
 	if err != nil {
 		return nil, err
@@ -97,10 +104,19 @@ func LoadClient(override string) (*Client, error) {
 	if err := decode(merged, &c); err != nil {
 		return nil, err
 	}
+	return &c, nil
+}
+
+// LoadClient loads and validates the pds configuration.
+func LoadClient(override string) (*Client, error) {
+	c, err := LoadClientUnvalidated(override)
+	if err != nil {
+		return nil, err
+	}
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	return &c, nil
+	return c, nil
 }
 
 // LoadServer loads and validates the pdsd configuration.
@@ -130,8 +146,14 @@ func LoadServer(override string) (*Server, error) {
 
 // Validate checks that the client config has everything required from somewhere.
 func (c *Client) Validate() error {
-	if c.Endpoint == "" {
-		return fmt.Errorf("config: endpoint is required")
+	if c.Host == "" {
+		return fmt.Errorf("config: host is required")
+	}
+	if c.SSHPort <= 0 || c.SSHPort > 65535 {
+		return fmt.Errorf("config: sshPort must be between 1 and 65535")
+	}
+	if c.HTTPPort < 0 || c.HTTPPort > 65535 {
+		return fmt.Errorf("config: httpPort must be between 1 and 65535")
 	}
 	if len(c.TrustedKeys) == 0 {
 		return fmt.Errorf("config: at least one trustedKeys entry is required")
@@ -143,6 +165,9 @@ func (c *Client) Validate() error {
 func (s *Server) Validate() error {
 	if s.Listen == "" {
 		return fmt.Errorf("config: listen is required")
+	}
+	if s.HTTPListen != "" && !s.AllowAnonymous {
+		return fmt.Errorf("config: httpListen requires allowAnonymous: true (HTTP is unauthenticated read-only access)")
 	}
 	if len(s.AuthorizedKeys) == 0 && !s.AllowAnonymous {
 		return fmt.Errorf("config: at least one authorizedKeys entry is required (or set allowAnonymous: true)")
