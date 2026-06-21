@@ -11,8 +11,8 @@ import (
 
 	"github.com/pkg/sftp"
 
-	"petris.net/pds/internal/config"
-	"petris.net/pds/internal/store"
+	"petris.dev/pds/internal/config"
+	"petris.dev/pds/internal/store"
 )
 
 // handlers implements sftp.FileReader/FileWriter/FileLister/FileCmder for one

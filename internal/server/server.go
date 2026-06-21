@@ -17,9 +17,9 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"petris.net/pds/internal/config"
-	"petris.net/pds/internal/sshkeys"
-	"petris.net/pds/internal/store"
+	"petris.dev/pds/internal/config"
+	"petris.dev/pds/internal/sshkeys"
+	"petris.dev/pds/internal/store"
 )
 
 // Connection limits guarding against pre-auth resource exhaustion.

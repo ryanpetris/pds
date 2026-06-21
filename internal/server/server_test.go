@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"petris.net/pds/internal/config"
+	"petris.dev/pds/internal/config"
 )
 
 func testSigner(t *testing.T) ssh.Signer {

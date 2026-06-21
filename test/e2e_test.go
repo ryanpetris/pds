@@ -18,9 +18,9 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"petris.net/pds/internal/client"
-	"petris.net/pds/internal/config"
-	"petris.net/pds/internal/server"
+	"petris.dev/pds/internal/client"
+	"petris.dev/pds/internal/config"
+	"petris.dev/pds/internal/server"
 )
 
 type keypair struct {

@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"petris.net/pds/internal/config"
+	"petris.dev/pds/internal/config"
 )
 
 // ParsePublicKey parses a single authorized_keys-format line.

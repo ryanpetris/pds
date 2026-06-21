@@ -14,8 +14,8 @@ import (
 	"os"
 	"strings"
 
-	"petris.net/pds/internal/client"
-	"petris.net/pds/internal/config"
+	"petris.dev/pds/internal/client"
+	"petris.dev/pds/internal/config"
 )
 
 func main() {

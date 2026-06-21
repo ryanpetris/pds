@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"path"
 
-	"petris.net/pds/internal/config"
+	"petris.dev/pds/internal/config"
 )
 
 // remotePath turns a user-supplied path into a cleaned absolute SFTP path.

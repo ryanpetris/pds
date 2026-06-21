@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"petris.net/pds/internal/config"
+	"petris.dev/pds/internal/config"
 )
 
 func TestCommitVersionedByHost(t *testing.T) {

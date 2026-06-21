@@ -25,7 +25,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"petris.net/pds/internal/validate"
+	"petris.dev/pds/internal/validate"
 )
 
 // Role selects which program's config tree to load.

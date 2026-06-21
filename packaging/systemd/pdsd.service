@@ -4,7 +4,7 @@
 # Runs as the logged-in user, reading host keys from ~/.ssh/id_* and config from
 # ~/.config/pds/server (plus the /etc and /usr/lib tiers).
 Description=PDS server (pdsd)
-Documentation=https://petris.net/pds
+Documentation=https://petris.dev/pds
 
 [Service]
 Type=simple

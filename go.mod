@@ -1,4 +1,4 @@
-module petris.net/pds
+module petris.dev/pds
 
 go 1.26.4
 

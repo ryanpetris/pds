@@ -10,7 +10,7 @@ pkgver="${PDS_PKGVER:-0.0.0}"
 pkgrel=1
 pkgdesc="Petris Distribution System — SSH/SFTP file distribution, script runner, and validated uploads"
 arch=('x86_64')
-url="https://petris.net/pds"
+url="https://petris.dev/pds"
 license=('MIT')
 makedepends=('go')
 # Pure-Go, CGO-free static binaries: no debug package to extract.

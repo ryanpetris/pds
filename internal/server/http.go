@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"petris.net/pds/internal/config"
-	"petris.net/pds/internal/store"
+	"petris.dev/pds/internal/config"
+	"petris.dev/pds/internal/store"
 )
 
 // httpHandler serves bucket contents read-only over HTTP, behaving as an anonymous

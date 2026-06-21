@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	"petris.net/pds/internal/config"
+	"petris.dev/pds/internal/config"
 )
 
 func TestResolveEndpoint(t *testing.T) {

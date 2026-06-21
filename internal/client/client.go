@@ -15,8 +15,8 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"petris.net/pds/internal/config"
-	"petris.net/pds/internal/sshkeys"
+	"petris.dev/pds/internal/config"
+	"petris.dev/pds/internal/sshkeys"
 )
 
 // Client is a connected pds session.

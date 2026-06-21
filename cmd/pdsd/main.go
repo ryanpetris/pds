@@ -8,9 +8,9 @@ import (
 	"log"
 	"os"
 
-	"petris.net/pds/internal/config"
-	"petris.net/pds/internal/server"
-	"petris.net/pds/internal/sshkeys"
+	"petris.dev/pds/internal/config"
+	"petris.dev/pds/internal/server"
+	"petris.dev/pds/internal/sshkeys"
 )
 
 func main() {

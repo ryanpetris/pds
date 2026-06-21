@@ -5,7 +5,7 @@
 # ~%i/.ssh/id_* and its config from that user's tier (~%i/.config/pds/server,
 # plus /etc/pds/server and /usr/lib/pds/server).
 Description=PDS server (pdsd) for user %i
-Documentation=https://petris.net/pds
+Documentation=https://petris.dev/pds
 After=network-online.target
 Wants=network-online.target
 

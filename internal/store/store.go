@@ -16,8 +16,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"petris.net/pds/internal/config"
-	"petris.net/pds/internal/validate"
+	"petris.dev/pds/internal/config"
+	"petris.dev/pds/internal/validate"
 )
 
 // timeFormat is the versioned filename stamp: yyyyMMddHHmmss (UTC, server clock).
