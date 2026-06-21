@@ -64,7 +64,7 @@ type Client struct {
 
 // Server is the pdsd configuration.
 type Server struct {
-	Listen         string            `yaml:"listen"`
+	SSHListen      string            `yaml:"sshListen"`
 	HTTPListen     string            `yaml:"httpListen"`
 	AuthorizedKeys []ClientEntry     `yaml:"authorizedKeys"`
 	AllowAnonymous bool              `yaml:"allowAnonymous"`
@@ -130,8 +130,8 @@ func parseEndpoint(value string) (EndpointSpec, error) {
 	return EndpointSpec{Addr: value}, nil
 }
 
-// ListenEndpoint returns the parsed primary (SSH/SFTP) listen endpoint.
-func (s *Server) ListenEndpoint() (EndpointSpec, error) { return parseEndpoint(s.Listen) }
+// SSHEndpoint returns the parsed primary (SSH/SFTP) listen endpoint.
+func (s *Server) SSHEndpoint() (EndpointSpec, error) { return parseEndpoint(s.SSHListen) }
 
 // HTTPEndpoint returns the parsed read-only HTTP endpoint and whether one is
 // configured at all.
@@ -229,10 +229,10 @@ func (c *Client) Validate() error {
 
 // Validate checks that the server config is internally consistent.
 func (s *Server) Validate() error {
-	if s.Listen == "" {
-		return fmt.Errorf("config: listen is required")
+	if s.SSHListen == "" {
+		return fmt.Errorf("config: sshListen is required")
 	}
-	if _, err := parseEndpoint(s.Listen); err != nil {
+	if _, err := parseEndpoint(s.SSHListen); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	if s.HTTPListen != "" {

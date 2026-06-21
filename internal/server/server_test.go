@@ -29,7 +29,7 @@ func testSigner(t *testing.T) ssh.Signer {
 // When either endpoint stops, runGroups must return and tear down the other, so the
 // HTTP endpoint never outlives SSH serving (and vice versa).
 func TestServeTearsDownBoth(t *testing.T) {
-	srv, err := New(&config.Server{Listen: "127.0.0.1:0", AllowAnonymous: true}, []ssh.Signer{testSigner(t)})
+	srv, err := New(&config.Server{SSHListen: "127.0.0.1:0", AllowAnonymous: true}, []ssh.Signer{testSigner(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestServeTearsDownBoth(t *testing.T) {
 // Tearing down an HTTP listener must close its active connections, not just stop
 // accepting new ones — otherwise unauthenticated reads outlive the endpoint.
 func TestHTTPPrepareClosesConnections(t *testing.T) {
-	srv, err := New(&config.Server{Listen: "127.0.0.1:0", AllowAnonymous: true}, []ssh.Signer{testSigner(t)})
+	srv, err := New(&config.Server{SSHListen: "127.0.0.1:0", AllowAnonymous: true}, []ssh.Signer{testSigner(t)})
 	if err != nil {
 		t.Fatal(err)
 	}

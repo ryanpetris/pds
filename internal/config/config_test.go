@@ -45,7 +45,7 @@ func TestLayeredLoadAndPrecedence(t *testing.T) {
 		}
 	}
 	write(filepath.Join(dir, "config.yaml"), `
-listen: ":1"
+sshListen: ":1"
 authorizedKeys:
   - host: web01
     keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBASE base"]
@@ -54,9 +54,9 @@ buckets:
     path: /srv/scripts
     mode: ro
 `)
-	// Drop-in overrides listen and adds a bucket; lists union.
+	// Drop-in overrides sshListen and adds a bucket; lists union.
 	write(filepath.Join(dir, "config.d", "10-extra.yaml"), `
-listen: ":2222"
+sshListen: ":2222"
 buckets:
   metrics:
     path: /data/metrics
@@ -73,8 +73,8 @@ buckets:
 	if err := decode(merged, &s); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if s.Listen != ":2222" {
-		t.Errorf("drop-in should override listen, got %q", s.Listen)
+	if s.SSHListen != ":2222" {
+		t.Errorf("drop-in should override sshListen, got %q", s.SSHListen)
 	}
 	if len(s.Buckets) != 2 {
 		t.Errorf("expected 2 buckets, got %d", len(s.Buckets))
@@ -94,7 +94,7 @@ func TestLoadServerExpandsBucketHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := `
-listen: ":1"
+sshListen: ":1"
 authorizedKeys:
   - host: web01
     keys: ["ssh-ed25519 AAAAEXAMPLE web01"]
@@ -123,7 +123,7 @@ buckets:
 
 func TestValidateExecBucketMustBeRO(t *testing.T) {
 	s := Server{
-		Listen:         ":1",
+		SSHListen:      ":1",
 		AuthorizedKeys: []ClientEntry{{Host: "h", Keys: []string{"k"}}},
 		ExecBucket:     "scripts",
 		Buckets: map[string]Bucket{
@@ -141,7 +141,7 @@ func TestValidateExecBucketMustBeRO(t *testing.T) {
 
 func TestValidateRWNeedsValidator(t *testing.T) {
 	s := Server{
-		Listen:         ":1",
+		SSHListen:      ":1",
 		AuthorizedKeys: []ClientEntry{{Host: "h", Keys: []string{"k"}}},
 		Buckets: map[string]Bucket{
 			"m": {Path: "/m", Mode: "rw", Extension: "yaml"}, // no validator
@@ -155,7 +155,7 @@ func TestValidateRWNeedsValidator(t *testing.T) {
 func TestValidateExtension(t *testing.T) {
 	mk := func(ext string) *Server {
 		return &Server{
-			Listen:         ":1",
+			SSHListen:      ":1",
 			AuthorizedKeys: []ClientEntry{{Host: "h", Keys: []string{"k"}}},
 			Buckets:        map[string]Bucket{"m": {Path: "/m", Mode: "rw", Extension: ext, Validator: "none"}},
 		}
@@ -174,7 +174,7 @@ func TestValidateExtension(t *testing.T) {
 
 func TestValidateAnonymousReplacesAuthorizedKeys(t *testing.T) {
 	// No authorizedKeys and no allowAnonymous: must fail.
-	s := &Server{Listen: ":1"}
+	s := &Server{SSHListen: ":1"}
 	if err := s.Validate(); err == nil {
 		t.Fatalf("server without authorizedKeys or allowAnonymous must fail")
 	}
@@ -234,7 +234,7 @@ func TestLoadClientUnvalidatedSkipsRequirements(t *testing.T) {
 
 func TestValidateHTTPRequiresAnonymous(t *testing.T) {
 	s := &Server{
-		Listen:         ":1",
+		SSHListen:      ":1",
 		HTTPListen:     ":8080",
 		AuthorizedKeys: []ClientEntry{{Host: "h", Keys: []string{"k"}}},
 	}
@@ -289,10 +289,10 @@ func TestParseEndpoint(t *testing.T) {
 }
 
 func TestServerEndpointAccessors(t *testing.T) {
-	s := &Server{Listen: "iface:eth0:2222", HTTPListen: ""}
-	l, err := s.ListenEndpoint()
+	s := &Server{SSHListen: "iface:eth0:2222", HTTPListen: ""}
+	l, err := s.SSHEndpoint()
 	if err != nil || l.Iface != "eth0" || l.Port != "2222" {
-		t.Fatalf("ListenEndpoint = %+v, %v", l, err)
+		t.Fatalf("SSHEndpoint = %+v, %v", l, err)
 	}
 	if _, ok, _ := s.HTTPEndpoint(); ok {
 		t.Errorf("HTTPEndpoint should report not configured when httpListen is empty")

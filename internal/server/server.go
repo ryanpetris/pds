@@ -122,7 +122,7 @@ func (s *Server) ListenAndServe() error {
 		ticks = append(ticks, tick)
 	}
 
-	lspec, err := s.cfg.ListenEndpoint()
+	lspec, err := s.cfg.SSHEndpoint()
 	if err != nil {
 		return err
 	}

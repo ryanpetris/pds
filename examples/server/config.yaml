@@ -7,9 +7,9 @@
 #
 # Host keys are NOT configured here: pdsd uses ~/.ssh/id_* (override with -ssh-dir).
 
-listen: ":2222"
+sshListen: ":2222"
 
-# `listen` (and `httpListen` below) accept three forms:
+# `sshListen` (and `httpListen` below) accept three forms:
 #   ":2222"            — all interfaces on this port
 #   "127.0.0.1:2222"   — a specific IP (IPv6 as "[::1]:2222")
 #   "myhost:2222"      — a hostname, resolved and bound once at startup
@@ -25,9 +25,9 @@ listen: ":2222"
 # the systemd unit to allow AF_NETLINK (see packaging/systemd/pdsd@.service).
 
 # Optional. When set, pdsd also serves the buckets read-only over plain HTTP on this
-# address (its own port; SSH is unaffected; same address forms as `listen`). HTTP is
-# unauthenticated, so it REQUIRES allowAnonymous: true below — otherwise pdsd exits
-# at startup. Leave unset to disable.
+# address (its own port; SSH is unaffected; same address forms as `sshListen`). HTTP
+# is unauthenticated, so it REQUIRES allowAnonymous: true below — otherwise pdsd
+# exits at startup. Leave unset to disable.
 # httpListen: ":8080"
 
 # Optional. Exposed to clients as the .pds/exec alias and used by `pds exec`.

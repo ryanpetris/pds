@@ -85,7 +85,7 @@ func newServer(t *testing.T, tweak func(*config.Server)) (srv *server.Server, ho
 	}
 
 	cfg := &config.Server{
-		Listen:         "127.0.0.1:0",
+		SSHListen:      "127.0.0.1:0",
 		ExecBucket:     "scripts",
 		AuthorizedKeys: []config.ClientEntry{{Host: "web01", Keys: []string{clientKey.pubLine}}},
 		Buckets: map[string]config.Bucket{

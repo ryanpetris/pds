@@ -136,7 +136,7 @@ identities:                      # optional; defaults to ~/.ssh/id_*
 ### `pdsd` (server) — `pds/server/config.yaml`
 
 ```yaml
-listen: ":2222"                  # ":port" (all), an IP literal, a hostname, or "iface:<name>:port"
+sshListen: ":2222"               # ":port" (all), an IP literal, a hostname, or "iface:<name>:port"
 httpListen: ":8080"              # optional; read-only HTTP on its own port (requires allowAnonymous)
 execBucket: scripts              # optional; exposed as .pds/exec — MUST be a mode:ro bucket
 allowAnonymous: false            # optional; allow keyless read-only clients (user "anonymous")
@@ -159,7 +159,7 @@ buckets:
     validator: yaml              # yaml | json | jsonl | none
 ```
 
-`listen` and `httpListen` accept four forms: `":2222"` (all interfaces), an IP
+`sshListen` and `httpListen` accept four forms: `":2222"` (all interfaces), an IP
 literal (`"127.0.0.1:2222"`, `"[::1]:2222"`), a hostname (`"host.example:2222"`),
 or `"iface:<name>:<port>"` to track a network interface. The first three are
 bound once and pdsd exits if the bind fails. The `iface:` form binds the named
@@ -182,7 +182,7 @@ pds [-config FILE] ls   [path]              # default: root
 pds [-config FILE] push <bucket> [FILE|-]   # default: stdin
 pds [-config FILE] meta <bucket>
 pds [-config FILE] exec <name> [args...]
-pds [-config FILE] endpoint [--http]        # print host:sshPort, or http://host:httpPort
+pds [-config FILE] endpoint [--ssh|--http]  # print host:sshPort (--ssh same), or http://host:httpPort
 ```
 
 `pds exec <name> [args...]` pulls `<name>` from the exec bucket, writes it to a temp

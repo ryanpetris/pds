@@ -6,7 +6,7 @@
 //	pds [-config FILE] push  <bucket> [FILE|-]  # default: stdin
 //	pds [-config FILE] meta  <bucket>
 //	pds [-config FILE] exec  <name> [args...]
-//	pds [-config FILE] endpoint [--http]        # print <host>:<port> (or http URL)
+//	pds [-config FILE] endpoint [--ssh|--http]  # print <host>:<port> (or http URL)
 package main
 
 import (
@@ -170,16 +170,21 @@ func runExec(c *client.Client, args []string) {
 }
 
 func runEndpoint(cfg *config.Client, args []string) {
-	http := false
+	var wantSSH, wantHTTP bool
 	for _, a := range args {
 		switch a {
+		case "--ssh", "-ssh":
+			wantSSH = true
 		case "--http", "-http":
-			http = true
+			wantHTTP = true
 		default:
-			fatal("usage: pds endpoint [--http]")
+			fatal("usage: pds endpoint [--ssh | --http]")
 		}
 	}
-	if http {
+	if wantSSH && wantHTTP {
+		fatal("endpoint: --ssh and --http are mutually exclusive")
+	}
+	if wantHTTP {
 		u, err := client.ResolveHTTPURL(cfg)
 		if err != nil {
 			fatal("%v", err)
@@ -187,6 +192,8 @@ func runEndpoint(cfg *config.Client, args []string) {
 		fmt.Println(u)
 		return
 	}
+	// The default and --ssh both print the protocolless SSH endpoint; --ssh is the
+	// explicit counterpart to --http.
 	ep, err := client.ResolveEndpoint(cfg)
 	if err != nil {
 		fatal("%v", err)
@@ -203,7 +210,7 @@ usage:
   pds [-config FILE] push  <bucket> [FILE|-]  # default: stdin
   pds [-config FILE] meta  <bucket>
   pds [-config FILE] exec  <name> [args...]
-  pds [-config FILE] endpoint [--http]        # print <host>:<port>, or http://<host>:<port>
+  pds [-config FILE] endpoint [--ssh|--http]  # print <host>:<port> (--ssh same), or http://<host>:<port>
 `)
 }
 
