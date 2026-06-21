@@ -1,0 +1,20 @@
+[Unit]
+# Per-user pdsd, run under the user's own session manager:
+#   systemctl --user enable --now pdsd
+# Runs as the logged-in user, reading host keys from ~/.ssh/id_* and config from
+# ~/.config/pds/server (plus the /etc and /usr/lib tiers).
+Description=PDS server (pdsd)
+Documentation=https://petris.net/pds
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/pdsd
+Restart=on-failure
+RestartSec=2
+
+# --- Hardening (subset that works under the user manager) ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

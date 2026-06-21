@@ -1,0 +1,25 @@
+# Keep the build context (and the Arch package build, see packaging/arch/Dockerfile)
+# lean. NOTE: .git is intentionally NOT ignored — packaging/arch/build-local.sh
+# derives the package version from the git revision.
+
+# Build output
+/pds
+/pdsd
+/bin/
+/dist/
+
+# Arch package build artifacts
+/packaging/arch/pkg/
+/packaging/arch/src/
+/packaging/arch/pds-*.tar.gz
+/packaging/arch/*.pkg.tar.*
+/*.pkg.tar.*
+
+# Local / test artifacts
+*.out
+coverage.*
+.toby.yaml
+
+# Editors / IDEs
+.idea/
+.vscode/

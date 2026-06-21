@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test with coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          go test -covermode=atomic -coverprofile=dist/coverage.out ./...
+          go tool cover -func=dist/coverage.out | tee dist/coverage.txt
+          go tool cover -html=dist/coverage.out -o dist/coverage.html
+          {
+            printf '## Test Coverage\n\n'
+            printf '```\n'
+            cat dist/coverage.txt
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            dist/coverage.out
+            dist/coverage.txt
+            dist/coverage.html
+
+      - name: Derive version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          describe="$(git describe --tags --long --match 'v*' 2>/dev/null || true)"
+          if [ -z "$describe" ]; then
+            version="dev"
+          elif [[ "$describe" =~ ^(.+)-0-g[0-9a-f]+$ ]]; then
+            version="${BASH_REMATCH[1]}"
+          elif [[ "$describe" =~ ^(.+)-([0-9]+)-g([0-9a-f]+)$ ]]; then
+            version="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
+          else
+            version="$describe"
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build Linux binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/linux-x86_64 dist/linux-arm64
+          # Pure-Go, CGO-free static binaries.
+          ldflags="-s -w -extldflags=-static"
+
+          for cmd in pds pdsd; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$ldflags" \
+              -o "dist/linux-x86_64/$cmd" "./cmd/$cmd"
+            CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$ldflags" \
+              -o "dist/linux-arm64/$cmd" "./cmd/$cmd"
+          done
+
+          tar -C dist/linux-x86_64 -czf dist/pds-linux-x86_64.tar.gz pds pdsd
+          tar -C dist/linux-arm64 -czf dist/pds-linux-arm64.tar.gz pds pdsd
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-binaries
+          path: |
+            dist/pds-linux-x86_64.tar.gz
+            dist/pds-linux-arm64.tar.gz
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(
+            dist/pds-linux-x86_64.tar.gz
+            dist/pds-linux-arm64.tar.gz
+            dist/coverage.out
+            dist/coverage.txt
+            dist/coverage.html
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" "${assets[@]}" --title "$TAG" --notes "Release $TAG"
+          fi

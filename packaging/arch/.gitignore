@@ -1,0 +1,5 @@
+# Artifacts produced by build-local.sh / makepkg.
+/pds-*.tar.gz
+/*.pkg.tar.*
+/pkg/
+/src/

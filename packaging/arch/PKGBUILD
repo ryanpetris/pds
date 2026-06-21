@@ -1,0 +1,51 @@
+# Maintainer: Ryan Petris <ryan@petris.net>
+#
+# Local-testing PKGBUILD. The source tarball is produced from the working tree
+# by ./build-local.sh (which also sets PDS_PKGVER); integrity checks are
+# intentionally skipped (sha256sums=SKIP) because the tarball is regenerated on
+# every build. Do not use this as-is for AUR/distribution.
+
+pkgname=pds
+pkgver="${PDS_PKGVER:-0.0.0}"
+pkgrel=1
+pkgdesc="Petris Distribution System — SSH/SFTP file distribution, script runner, and validated uploads"
+arch=('x86_64')
+url="https://petris.net/pds"
+license=('MIT')
+makedepends=('go')
+# Pure-Go, CGO-free static binaries: no debug package to extract.
+options=('!debug')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+	cd "$srcdir/$pkgname-$pkgver"
+	# -trimpath strips the build $srcdir from the binaries (reproducible, and
+	# silences makepkg's "reference to $srcdir" check). go picks GOFLAGS up
+	# automatically; the Makefile supplies CGO_ENABLED=0.
+	export GOFLAGS="-trimpath"
+	make build
+}
+
+package() {
+	cd "$srcdir/$pkgname-$pkgver"
+
+	install -Dm0755 bin/pds  "$pkgdir/usr/bin/pds"
+	install -Dm0755 bin/pdsd "$pkgdir/usr/bin/pdsd"
+
+	# Systemd units: system template (instanced by user) + per-user unit.
+	install -Dm0644 packaging/systemd/pdsd@.service \
+		"$pkgdir/usr/lib/systemd/system/pdsd@.service"
+	install -Dm0644 packaging/systemd/pdsd.service \
+		"$pkgdir/usr/lib/systemd/user/pdsd.service"
+
+	# Example configs (copy into a config tier to use; see README).
+	install -Dm0644 examples/server/config.yaml \
+		"$pkgdir/usr/share/pds/config.server.example.yaml"
+	install -Dm0644 examples/client/config.yaml \
+		"$pkgdir/usr/share/pds/config.client.example.yaml"
+
+	install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+	install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
