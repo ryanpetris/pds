@@ -1,0 +1,57 @@
+# Example pdsd server config.
+# Install to one of:
+#   /usr/lib/pds/server/config.yaml         (vendor default)
+#   /etc/pds/server/config.yaml             (system)
+#   ~/.config/pds/server/config.yaml        (per-user, highest precedence)
+# Drop-ins in the sibling config.d/ directory override the base file.
+#
+# Host keys are NOT configured here: pdsd uses ~/.ssh/id_* (override with -ssh-dir).
+
+listen: ":2222"
+
+# Optional. Exposed to clients as the .pds/exec alias and used by `pds exec`.
+# MUST reference a mode:ro bucket, or pdsd exits at startup.
+execBucket: scripts
+
+# Map each authorized client public key to the host name it acts as. byHost
+# buckets file that host's pushes automatically. Multiple keys per host allowed.
+authorizedKeys:
+  - host: web01
+    keys:
+      - ssh-ed25519 AAAAEXAMPLEreplace-with-web01-client-key web01
+  - host: web02
+    keys:
+      - ssh-ed25519 AAAAEXAMPLEreplace-with-web02-client-key web02
+
+buckets:
+  # Read-only script distribution.
+  scripts:
+    path: /srv/pds/scripts
+    mode: ro
+
+  # Read-write, versioned, per-host metrics collection.
+  metrics:
+    path: /data/metrics
+    mode: rw
+    versioned: true     # keep every dated push + a latest.<ext> symlink
+    byHost: true         # file under <path>/<host>/
+    extension: yaml
+    validator: yaml      # yaml | json | jsonl | none
+
+  # Read-write, latest-only, shared (any authorized host may push).
+  status:
+    path: /data/status
+    mode: rw
+    versioned: false    # overwrite a single latest.<ext>
+    byHost: false
+    extension: json
+    validator: json
+
+  # Read-write, versioned, per-host JSON Lines logs (one JSON value per line).
+  logs:
+    path: /data/logs
+    mode: rw
+    versioned: true
+    byHost: true
+    extension: jsonl
+    validator: jsonl

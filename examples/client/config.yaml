@@ -1,0 +1,19 @@
+# Example pds client config.
+# Install to one of:
+#   /usr/lib/pds/client/config.yaml         (vendor default)
+#   /etc/pds/client/config.yaml             (system)
+#   ~/.config/pds/client/config.yaml        (per-user, highest precedence)
+# Drop-ins in the sibling config.d/ directory override the base file.
+
+endpoint: pds.example.com:2222   # PDS_ENDPOINT overrides this at runtime
+
+# Pinned server host keys. Any match is accepted, so list every node in a
+# cluster (each with its own locally generated key) and keep old keys here
+# during rotation.
+trustedKeys:
+  - ssh-ed25519 AAAAEXAMPLEreplace-with-node1-host-key node1
+  - ssh-ed25519 AAAAEXAMPLEreplace-with-node2-host-key node2
+
+# Optional; defaults to ~/.ssh/id_* if omitted.
+# identities:
+#   - ~/.ssh/id_ed25519

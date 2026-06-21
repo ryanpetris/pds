@@ -1,0 +1,11 @@
+# Built binaries
+/pds
+/pdsd
+/bin/
+
+# Go
+*.test
+*.out
+
+# Toby sandbox config
+.toby.yaml
