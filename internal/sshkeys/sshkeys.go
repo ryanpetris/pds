@@ -28,7 +28,10 @@ func ParsePublicKey(line string) (ssh.PublicKey, error) {
 func blob(pk ssh.PublicKey) string { return string(pk.Marshal()) }
 
 // TrustedSet parses a list of authorized_keys-format public keys into a membership
-// set keyed by wire encoding, for client-side host-key pinning.
+// set keyed by wire encoding, for client-side host-key pinning. The client pins
+// host-key negotiation to ed25519, so every trusted key must be an ed25519 key; any
+// other format (ecdsa, rsa, dsa, host certificate, …) is rejected rather than silently
+// ignored, since it could never be negotiated and matched.
 func TrustedSet(lines []string) (map[string]bool, error) {
 	set := make(map[string]bool, len(lines))
 	for _, ln := range lines {
@@ -39,6 +42,9 @@ func TrustedSet(lines []string) (map[string]bool, error) {
 		pk, err := ParsePublicKey(ln)
 		if err != nil {
 			return nil, fmt.Errorf("trusted key %q: %w", ln, err)
+		}
+		if pk.Type() != ssh.KeyAlgoED25519 {
+			return nil, fmt.Errorf("trusted key %q: only ed25519 host keys are supported, got %s", ln, pk.Type())
 		}
 		set[blob(pk)] = true
 	}
@@ -52,9 +58,14 @@ func TrustedSet(lines []string) (map[string]bool, error) {
 func Trusted(set map[string]bool, pk ssh.PublicKey) bool { return set[blob(pk)] }
 
 // ClientHostMap maps each authorized client public key to the host name it
-// authenticates as, built from the server's authorizedKeys config.
-func ClientHostMap(entries []config.ClientEntry) (map[string]string, error) {
-	m := make(map[string]string)
+// authenticates as, built from the server's authorizedKeys config. Non-ed25519 keys are
+// ignored (the system standardizes on ed25519) and reported in warnings rather than
+// failing, so a stray key of another type doesn't take the server down. A key that
+// cannot be parsed at all is still a hard error. The returned map may be empty (e.g.
+// every entry was ignored); the caller decides whether that is acceptable (it is for an
+// anonymous-capable server).
+func ClientHostMap(entries []config.ClientEntry) (m map[string]string, warnings []string, err error) {
+	m = make(map[string]string)
 	for _, ce := range entries {
 		for _, k := range ce.Keys {
 			k = strings.TrimSpace(k)
@@ -63,15 +74,16 @@ func ClientHostMap(entries []config.ClientEntry) (map[string]string, error) {
 			}
 			pk, err := ParsePublicKey(k)
 			if err != nil {
-				return nil, fmt.Errorf("authorizedKeys host %q key %q: %w", ce.Host, k, err)
+				return nil, warnings, fmt.Errorf("authorizedKeys host %q key %q: %w", ce.Host, k, err)
+			}
+			if pk.Type() != ssh.KeyAlgoED25519 {
+				warnings = append(warnings, fmt.Sprintf("authorizedKeys host %q: ignoring non-ed25519 key (%s)", ce.Host, pk.Type()))
+				continue
 			}
 			m[blob(pk)] = ce.Host
 		}
 	}
-	if len(m) == 0 {
-		return nil, fmt.Errorf("no usable authorized client keys")
-	}
-	return m, nil
+	return m, warnings, nil
 }
 
 // HostFor returns the configured host name for an offered public key, if any.

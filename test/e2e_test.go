@@ -3,7 +3,11 @@ package e2e
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -16,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"petris.dev/pds/internal/client"
@@ -447,5 +452,160 @@ func TestTraversalContained(t *testing.T) {
 	var b bytes.Buffer
 	if err := c.Pull("scripts/../../etc/passwd", &b); err == nil {
 		t.Fatalf("traversal pull should fail, got %q", b.String())
+	}
+}
+
+// hostSignerLines returns three host-key signers (ed25519, ecdsa p256, rsa) and their
+// authorized_keys lines, for exercising mixed-host-key servers.
+func hostSignerLines(t *testing.T) (signers []ssh.Signer, ed, ec, rsaLine string) {
+	t.Helper()
+	_, edPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edS, err := ssh.NewSignerFromKey(edPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecK, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecS, err := ssh.NewSignerFromKey(ecK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaK, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaS, err := ssh.NewSignerFromKey(rsaK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := func(s ssh.Signer) string {
+		return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s.PublicKey())))
+	}
+	return []ssh.Signer{edS, ecS, rsaS}, line(edS), line(ecS), line(rsaS)
+}
+
+// rawMultiHostKeyServer starts a minimal SSH+SFTP server presenting all of the given
+// host keys (bypassing server.New's ed25519 filtering), so a test can exercise the
+// client's host-key negotiation against a server that offers several key types. It
+// accepts any client key.
+func rawMultiHostKeyServer(t *testing.T, signers []ssh.Signer) string {
+	t.Helper()
+	sc := &ssh.ServerConfig{
+		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+			return &ssh.Permissions{}, nil
+		},
+	}
+	for _, s := range signers {
+		sc.AddHostKey(s)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			nConn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveRawSFTP(nConn, sc)
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// serveRawSFTP completes one SSH handshake and serves the sftp subsystem over the real
+// filesystem — enough for the client's sftp.NewClient to succeed after the host key is
+// verified.
+func serveRawSFTP(nConn net.Conn, sc *ssh.ServerConfig) {
+	conn, chans, reqs, err := ssh.NewServerConn(nConn, sc)
+	if err != nil {
+		nConn.Close()
+		return
+	}
+	defer conn.Close()
+	go ssh.DiscardRequests(reqs)
+	for nc := range chans {
+		if nc.ChannelType() != "session" {
+			_ = nc.Reject(ssh.UnknownChannelType, "")
+			continue
+		}
+		ch, requests, err := nc.Accept()
+		if err != nil {
+			continue
+		}
+		go func() {
+			// Closing the channel when the sftp session ends lets the client's sftp
+			// recv loop see EOF, so client.Close() returns instead of blocking.
+			defer ch.Close()
+			for req := range requests {
+				if req.Type == "subsystem" && len(req.Payload) >= 4 && string(req.Payload[4:]) == "sftp" {
+					_ = req.Reply(true, nil)
+					srv, err := sftp.NewServer(ch)
+					if err != nil {
+						return
+					}
+					_ = srv.Serve()
+					_ = srv.Close()
+					return
+				}
+				_ = req.Reply(false, nil)
+			}
+		}()
+	}
+}
+
+// Against a server offering ed25519+ecdsa+rsa host keys, Dial must pin negotiation to
+// the trusted ed25519 key — Go's default negotiation would otherwise settle on the
+// (untrusted) ecdsa key and fail. This is the regression test for the original bug.
+func TestDialPinsEd25519AgainstMultiHostKeyServer(t *testing.T) {
+	signers, edLine, _, _ := hostSignerLines(t)
+	endpoint := rawMultiHostKeyServer(t, signers)
+	clientKey := genKey(t, t.TempDir(), "client")
+	c, err := dial(t, endpoint, []string{edLine}, clientKey.pemPath)
+	if err != nil {
+		t.Fatalf("dial against multi-host-key server trusting ed25519: %v", err)
+	}
+	c.Close()
+}
+
+// A non-ed25519 trusted key is rejected before dialing (the client only supports
+// ed25519 host keys).
+func TestDialRejectsNonEd25519TrustedKey(t *testing.T) {
+	_, _, ecdsaLine, _ := hostSignerLines(t)
+	cfg := &config.Client{Host: "127.0.0.1", SSHPort: 1, TrustedKeys: []string{ecdsaLine}}
+	cfg.Identities = []string{genKey(t, t.TempDir(), "client").pemPath}
+	if _, err := client.Dial(cfg); err == nil {
+		t.Fatal("dial with a non-ed25519 trusted key should error")
+	}
+}
+
+// An untrusted host key must fail rather than silently downgrade to anonymous, even when
+// the server allows anonymous access.
+func TestDialUntrustedHostKeyDoesNotDowngrade(t *testing.T) {
+	endpoint, _, clientKey, _ := harnessWith(t, func(c *config.Server) { c.AllowAnonymous = true })
+	bogus := genKey(t, t.TempDir(), "bogus").pubLine // ed25519, but not the server's host key
+	if _, err := dial(t, endpoint, []string{bogus}, clientKey.pemPath); err == nil {
+		t.Fatal("expected dial to fail on an untrusted host key, not connect anonymously")
+	}
+}
+
+// With no client identity, Dial connects read-only as the anonymous user.
+func TestDialAnonymousConnects(t *testing.T) {
+	endpoint, host, _, _ := harnessWith(t, func(c *config.Server) { c.AllowAnonymous = true })
+	c, err := dialAnon(t, endpoint, []string{host.pubLine})
+	if err != nil {
+		t.Fatalf("anonymous dial: %v", err)
+	}
+	defer c.Close()
+	var b bytes.Buffer
+	if err := c.Ls("/", &b); err != nil {
+		t.Fatalf("ls: %v", err)
 	}
 }

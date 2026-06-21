@@ -44,23 +44,49 @@ const (
 	extAnon = "pds-anon"
 )
 
-// New builds a Server from config and the loaded host-key signers.
+// New builds a Server from config and the loaded host-key signers. Clients pin host-key
+// negotiation to ed25519, so non-ed25519 host keys and authorizedKeys are ignored (with a
+// warning) rather than presented or honored.
 func New(cfg *config.Server, signers []ssh.Signer) (*Server, error) {
 	if len(signers) == 0 {
 		return nil, fmt.Errorf("no host keys: place at least one private key in ~/.ssh/id_*")
 	}
+	hostKeys := make([]ssh.Signer, 0, len(signers))
+	for _, s := range signers {
+		if s.PublicKey().Type() != ssh.KeyAlgoED25519 {
+			log.Printf("pdsd: ignoring non-ed25519 host key (%s)", s.PublicKey().Type())
+			continue
+		}
+		hostKeys = append(hostKeys, s)
+	}
+	if len(hostKeys) == 0 {
+		return nil, fmt.Errorf("no ed25519 host keys: place an ed25519 private key in ~/.ssh/id_*")
+	}
 	sshCfg := &ssh.ServerConfig{}
 	if len(cfg.AuthorizedKeys) > 0 {
-		hostMap, err := sshkeys.ClientHostMap(cfg.AuthorizedKeys)
+		hostMap, warnings, err := sshkeys.ClientHostMap(cfg.AuthorizedKeys)
+		for _, w := range warnings {
+			log.Printf("pdsd: %s", w)
+		}
 		if err != nil {
 			return nil, err
 		}
-		sshCfg.PublicKeyCallback = func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			host, ok := sshkeys.HostFor(hostMap, key)
-			if !ok {
-				return nil, fmt.Errorf("unauthorized public key %s", ssh.FingerprintSHA256(key))
+		// Every authorizedKeys entry may have been ignored (all non-ed25519). With no
+		// usable client key there is no public-key auth: that's fine for an anonymous
+		// server (clients connect read-only), but fatal otherwise.
+		if len(hostMap) == 0 {
+			if !cfg.AllowAnonymous {
+				return nil, fmt.Errorf("authorizedKeys has no usable ed25519 keys and allowAnonymous is false")
 			}
-			return &ssh.Permissions{Extensions: map[string]string{extHost: host}}, nil
+			log.Printf("pdsd: no usable ed25519 authorizedKeys; serving anonymous (read-only) only")
+		} else {
+			sshCfg.PublicKeyCallback = func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+				host, ok := sshkeys.HostFor(hostMap, key)
+				if !ok {
+					return nil, fmt.Errorf("unauthorized public key %s", ssh.FingerprintSHA256(key))
+				}
+				return &ssh.Permissions{Extensions: map[string]string{extHost: host}}, nil
+			}
 		}
 	}
 	if cfg.AllowAnonymous {
@@ -75,7 +101,7 @@ func New(cfg *config.Server, signers []ssh.Signer) (*Server, error) {
 			return &ssh.Permissions{Extensions: map[string]string{extAnon: "1"}}, nil
 		}
 	}
-	for _, s := range signers {
+	for _, s := range hostKeys {
 		sshCfg.AddHostKey(s)
 	}
 	return &Server{

@@ -1,10 +1,15 @@
 package server
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +29,82 @@ func testSigner(t *testing.T) ssh.Signer {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func ecdsaSigner(t *testing.T) ssh.Signer {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := ssh.NewSignerFromKey(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func rsaSigner(t *testing.T) ssh.Signer {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := ssh.NewSignerFromKey(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// New ignores non-ed25519 host keys (clients only trust ed25519) but still builds the
+// server as long as one ed25519 key remains.
+func TestNewIgnoresNonEd25519HostKeys(t *testing.T) {
+	signers := []ssh.Signer{ecdsaSigner(t), testSigner(t), rsaSigner(t)}
+	if _, err := New(&config.Server{SSHListen: "127.0.0.1:0", AllowAnonymous: true}, signers); err != nil {
+		t.Fatalf("New with a mix of host keys should succeed: %v", err)
+	}
+}
+
+// New fails when no ed25519 host key is available, even if other types are present.
+func TestNewRequiresEd25519HostKey(t *testing.T) {
+	signers := []ssh.Signer{ecdsaSigner(t), rsaSigner(t)}
+	if _, err := New(&config.Server{SSHListen: "127.0.0.1:0", AllowAnonymous: true}, signers); err == nil {
+		t.Fatal("New with only non-ed25519 host keys should fail")
+	}
+}
+
+// nonEd25519AuthorizedKey returns an authorizedKeys entry holding a single ecdsa key,
+// which the ed25519-only server must ignore.
+func nonEd25519AuthorizedKey(t *testing.T) config.ClientEntry {
+	t.Helper()
+	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(ecdsaSigner(t).PublicKey())))
+	return config.ClientEntry{Host: "web01", Keys: []string{line}}
+}
+
+// An anonymous server whose authorizedKeys are all non-ed25519 should still start
+// (anonymous-only), not fail — the keys are ignored with a warning.
+func TestNewAllIgnoredAuthorizedKeysAnonymousOK(t *testing.T) {
+	cfg := &config.Server{
+		SSHListen:      "127.0.0.1:0",
+		AllowAnonymous: true,
+		AuthorizedKeys: []config.ClientEntry{nonEd25519AuthorizedKey(t)},
+	}
+	if _, err := New(cfg, []ssh.Signer{testSigner(t)}); err != nil {
+		t.Fatalf("anonymous server with all-ignored authorizedKeys should start: %v", err)
+	}
+}
+
+// The same config without anonymous access is fatal: no one could ever authenticate.
+func TestNewAllIgnoredAuthorizedKeysNoAnonFails(t *testing.T) {
+	cfg := &config.Server{
+		SSHListen:      "127.0.0.1:0",
+		AllowAnonymous: false,
+		AuthorizedKeys: []config.ClientEntry{nonEd25519AuthorizedKey(t)},
+	}
+	if _, err := New(cfg, []ssh.Signer{testSigner(t)}); err == nil {
+		t.Fatal("non-anonymous server with no usable authorizedKeys should fail")
+	}
 }
 
 // When either endpoint stops, runGroups must return and tear down the other, so the

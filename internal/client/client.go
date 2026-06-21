@@ -76,10 +76,12 @@ func normHost(h string) string {
 }
 
 // Dial connects to the configured endpoint (PDS_ENDPOINT overrides), verifying the
-// server host key against the trusted pool. It authenticates with the user's SSH
-// identities and, if the server rejects them (or none are available), automatically
-// retries read-only as the anonymous user. A host-key mismatch or network failure is
-// never downgraded — those abort.
+// server host key against the trusted pool. Host-key negotiation is pinned to ed25519
+// so the handshake settles on the trusted key rather than whatever Go's defaults prefer
+// (which would otherwise pick an untrusted ecdsa key when the server offers several). It
+// authenticates with the user's SSH identities and, if the server rejects them (or none
+// are available), automatically retries read-only as the anonymous user. A host-key
+// mismatch or network failure is never downgraded — those abort.
 func Dial(cfg *config.Client) (*Client, error) {
 	endpoint, err := ResolveEndpoint(cfg)
 	if err != nil {
@@ -115,6 +117,11 @@ func Dial(cfg *config.Client) (*Client, error) {
 	return dialSSH(endpoint, anonConfig(hostKey))
 }
 
+// ed25519HostKeyAlgos pins host-key negotiation to ed25519: the only host-key type the
+// client trusts (see sshkeys.TrustedSet). ed25519 has a single algorithm and no hash
+// variants, so this is the complete set.
+var ed25519HostKeyAlgos = []string{ssh.KeyAlgoED25519}
+
 // keyConfig builds a client config that authenticates by public key as the local user.
 func keyConfig(signers []ssh.Signer, hostKey ssh.HostKeyCallback) *ssh.ClientConfig {
 	user := os.Getenv("USER")
@@ -122,9 +129,10 @@ func keyConfig(signers []ssh.Signer, hostKey ssh.HostKeyCallback) *ssh.ClientCon
 		user = "pds"
 	}
 	return &ssh.ClientConfig{
-		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signers...)},
-		HostKeyCallback: hostKey,
+		User:              user,
+		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signers...)},
+		HostKeyCallback:   hostKey,
+		HostKeyAlgorithms: ed25519HostKeyAlgos,
 	}
 }
 
@@ -132,8 +140,9 @@ func keyConfig(signers []ssh.Signer, hostKey ssh.HostKeyCallback) *ssh.ClientCon
 // the reserved user name.
 func anonConfig(hostKey ssh.HostKeyCallback) *ssh.ClientConfig {
 	return &ssh.ClientConfig{
-		User:            config.AnonymousUser,
-		HostKeyCallback: hostKey,
+		User:              config.AnonymousUser,
+		HostKeyCallback:   hostKey,
+		HostKeyAlgorithms: ed25519HostKeyAlgos,
 	}
 }
 
