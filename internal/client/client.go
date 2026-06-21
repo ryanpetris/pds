@@ -111,7 +111,6 @@ func Dial(cfg *config.Client) (*Client, error) {
 		if errors.Is(err, errUntrustedHostKey) || !authRejected(err) {
 			return nil, err
 		}
-		fmt.Fprintln(os.Stderr, "pds: key authentication rejected; connecting anonymously (read-only)")
 	}
 	return dialSSH(endpoint, anonConfig(hostKey))
 }
