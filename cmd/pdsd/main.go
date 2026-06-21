@@ -4,9 +4,10 @@
 package main
 
 import (
-	"flag"
+	"fmt"
 	"log"
-	"os"
+
+	"github.com/spf13/cobra"
 
 	"petris.dev/pds/internal/config"
 	"petris.dev/pds/internal/server"
@@ -15,33 +16,49 @@ import (
 
 func main() {
 	log.SetFlags(log.LstdFlags)
-	configPath := flag.String("config", "", "extra config file merged at highest precedence")
-	sshDir := flag.String("ssh-dir", sshkeys.DefaultSSHDir(), "directory holding id_* host keys")
-	flag.Parse()
-
-	cfg, err := config.LoadServer(*configPath)
-	if err != nil {
+	if err := newRootCmd().Execute(); err != nil {
 		log.Fatalf("pdsd: %v", err)
 	}
+}
 
-	signers, skipped, err := sshkeys.LoadSigners(*sshDir)
+func newRootCmd() *cobra.Command {
+	var configPath, sshDir string
+	cmd := &cobra.Command{
+		Use:           "pdsd",
+		Short:         "Petris Distribution System server daemon",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return run(configPath, sshDir)
+		},
+	}
+	cmd.Flags().StringVar(&configPath, "config", "", "extra config file merged at highest precedence")
+	cmd.Flags().StringVar(&sshDir, "ssh-dir", sshkeys.DefaultSSHDir(), "directory holding id_* host keys")
+	return cmd
+}
+
+func run(configPath, sshDir string) error {
+	cfg, err := config.LoadServer(configPath)
 	if err != nil {
-		log.Fatalf("pdsd: loading host keys from %s: %v", *sshDir, err)
+		return err
+	}
+
+	signers, skipped, err := sshkeys.LoadSigners(sshDir)
+	if err != nil {
+		return fmt.Errorf("loading host keys from %s: %w", sshDir, err)
 	}
 	for _, s := range skipped {
 		log.Printf("pdsd: skipping host key %s", s)
 	}
 	if len(signers) == 0 {
-		log.Fatalf("pdsd: no usable host keys in %s (need an unencrypted id_* private key)", *sshDir)
+		return fmt.Errorf("no usable host keys in %s (need an unencrypted id_* private key)", sshDir)
 	}
 	log.Printf("pdsd: loaded %d host key(s)", len(signers))
 
 	srv, err := server.New(cfg, signers)
 	if err != nil {
-		log.Fatalf("pdsd: %v", err)
+		return err
 	}
-	if err := srv.ListenAndServe(); err != nil {
-		log.Printf("pdsd: %v", err)
-		os.Exit(1)
-	}
+	return srv.ListenAndServe()
 }

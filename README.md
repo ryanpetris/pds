@@ -115,7 +115,7 @@ where `<role>` is `client` (for `pds`) or `server` (for `pdsd`). Within each tie
 `config.yaml` is applied first, then every `config.d/*.yaml` in lexical order (so
 drop-ins override the tier's base). Nothing is required to exist; the merged result
 must simply contain everything required. Maps merge by key, lists are unioned,
-scalars are overridden by the higher tier. An optional `-config FILE` is merged last,
+scalars are overridden by the higher tier. An optional `--config FILE` is merged last,
 at the highest precedence.
 
 On-disk keys are camelCase.
@@ -172,18 +172,22 @@ Tracking interface addresses requires the systemd unit to allow `AF_NETLINK` (th
 shipped `packaging/systemd/pdsd@.service` already does).
 
 Server host keys are read from `~/.ssh/id_*` (override the directory with
-`-ssh-dir`). Passphrase-protected keys are skipped with a warning.
+`--ssh-dir`). Passphrase-protected keys are skipped with a warning.
 
 ## Usage
 
 ```
-pds [-config FILE] pull <path> [-o FILE]    # default: stdout
-pds [-config FILE] ls   [path]              # default: root
-pds [-config FILE] push <bucket> [FILE|-]   # default: stdin
-pds [-config FILE] meta <bucket>
-pds [-config FILE] exec <name> [args...]
-pds [-config FILE] endpoint [--ssh|--http]  # print host:sshPort (--ssh same), or http://host:httpPort
+pds [--config FILE] pull <path> [-o FILE]    # default: stdout
+pds [--config FILE] ls   [path]              # default: root
+pds [--config FILE] push <bucket> [FILE|-]   # default: stdin
+pds [--config FILE] meta <bucket>
+pds [--config FILE] exec <name> [args...]
+pds [--config FILE] endpoint [--ssh|--http]  # print host:sshPort (--ssh same), or http://host:httpPort
 ```
+
+Flags are GNU-style: `--config` (or `-c`) and `-o`/`--output` for `pull`. A global
+flag must come before the subcommand (e.g. `pds --config c.yaml ls`); everything
+after `exec <name>` is passed to the script untouched.
 
 `pds exec <name> [args...]` pulls `<name>` from the exec bucket, writes it to a temp
 file with the execute bit set, and runs it with `argv[0]` = `<name>` and the given
@@ -199,6 +203,22 @@ config="$(pds pull configs/.self/latest.yaml)"   # PDS_ENDPOINT is already set
 generate_metrics > /tmp/m.yaml
 pds push metrics /tmp/m.yaml
 ```
+
+### Shell completion
+
+`pds` generates bash/zsh completion scripts and completes commands with **live
+data** from the server — bucket names, paths (descending as you type), and `exec`
+script names are fetched over SSH at completion time, so each `<TAB>` opens a brief
+connection.
+
+```sh
+source <(pds completion bash)        # bash, current shell
+pds completion bash > /etc/bash_completion.d/pds   # system-wide
+
+pds completion zsh > "${fpath[1]}/_pds"            # zsh (then restart the shell)
+```
+
+`pds completion --help` lists fish and powershell too.
 
 ## Building
 

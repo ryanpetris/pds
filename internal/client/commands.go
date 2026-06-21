@@ -35,9 +35,15 @@ func (c *Client) PullToFile(remote, out string) error {
 	return c.Pull(remote, f)
 }
 
+// ReadDir returns the raw directory entries at remote (cleaned to an absolute
+// path). It backs Ls and is also used by shell completion.
+func (c *Client) ReadDir(remote string) ([]os.FileInfo, error) {
+	return c.sftp.ReadDir(remotePath(remote))
+}
+
 // Ls lists a directory, printing names (directories get a trailing slash).
 func (c *Client) Ls(remote string, w io.Writer) error {
-	infos, err := c.sftp.ReadDir(remotePath(remote))
+	infos, err := c.ReadDir(remote)
 	if err != nil {
 		return err
 	}

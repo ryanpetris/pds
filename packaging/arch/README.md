@@ -36,6 +36,8 @@ with no tag), then runs `makepkg`. Extra args pass straight through. Requires
 | Path | Source |
 | --- | --- |
 | `/usr/bin/pds`, `/usr/bin/pdsd` | `make build` output |
+| `/usr/share/bash-completion/completions/pds` | `pds completion bash` |
+| `/usr/share/zsh/site-functions/_pds` | `pds completion zsh` |
 | `/usr/lib/systemd/system/pdsd@.service` | `packaging/systemd/pdsd@.service` |
 | `/usr/lib/systemd/user/pdsd.service` | `packaging/systemd/pdsd.service` |
 | `/usr/share/pds/config.server.example.yaml` | `examples/server/config.yaml` |

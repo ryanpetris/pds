@@ -214,6 +214,40 @@ func TestHappyPath(t *testing.T) {
 	}
 }
 
+// TestReadDir covers the raw directory accessor that backs shell completion: it
+// returns entries (not formatted text) for buckets at the root and scripts under
+// the .pds/exec alias.
+func TestReadDir(t *testing.T) {
+	endpoint, host, clientKey, _ := harness(t)
+	c, err := dial(t, endpoint, []string{host.pubLine}, clientKey.pemPath)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+
+	names := func(remote string) map[string]bool {
+		infos, err := c.ReadDir(remote)
+		if err != nil {
+			t.Fatalf("ReadDir(%q): %v", remote, err)
+		}
+		m := map[string]bool{}
+		for _, fi := range infos {
+			m[fi.Name()] = true
+		}
+		return m
+	}
+
+	root := names("/")
+	for _, want := range []string{"scripts", "metrics", ".pds"} {
+		if !root[want] {
+			t.Errorf("ReadDir(/) missing %q: %v", want, root)
+		}
+	}
+	if execs := names(".pds/exec"); !execs["hello.sh"] {
+		t.Errorf("ReadDir(.pds/exec) missing hello.sh: %v", execs)
+	}
+}
+
 func TestAnonymousReadOnly(t *testing.T) {
 	endpoint, host, clientKey, _ := harnessWith(t, func(c *config.Server) {
 		c.AllowAnonymous = true
