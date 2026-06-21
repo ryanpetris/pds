@@ -106,6 +106,15 @@ func LoadServer(override string) (*Server, error) {
 	if err := decode(merged, &s); err != nil {
 		return nil, err
 	}
+	// Expand a leading ~ in bucket paths to the home of the user pdsd runs as.
+	for name, b := range s.Buckets {
+		p, err := expandUser(b.Path)
+		if err != nil {
+			return nil, fmt.Errorf("config: bucket %q path %q: %w", name, b.Path, err)
+		}
+		b.Path = p
+		s.Buckets[name] = b
+	}
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
@@ -183,6 +192,22 @@ var extRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 // separators or ".." traversal semantics.
 func validExtension(ext string) bool {
 	return extRe.MatchString(ext) && !strings.Contains(ext, "..")
+}
+
+// expandUser expands a leading "~" or "~/" to the home directory of the user the
+// process runs as. Other paths (including "~otheruser") are returned unchanged.
+func expandUser(path string) (string, error) {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if path == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, path[2:]), nil
 }
 
 // loadMerged walks the config tiers for role and returns the deep-merged map.

@@ -84,6 +84,43 @@ buckets:
 	}
 }
 
+func TestLoadServerExpandsBucketHome(t *testing.T) {
+	home := t.TempDir()
+	xdg := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	dir := filepath.Join(xdg, "pds", "server")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `
+listen: ":1"
+authorizedKeys:
+  - host: web01
+    keys: ["ssh-ed25519 AAAAEXAMPLE web01"]
+buckets:
+  data:
+    path: "~/buckets/data"
+    mode: ro
+  abs:
+    path: "/srv/abs"
+    mode: ro
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadServer("")
+	if err != nil {
+		t.Fatalf("LoadServer: %v", err)
+	}
+	if got, want := s.Buckets["data"].Path, filepath.Join(home, "buckets/data"); got != want {
+		t.Errorf("~ not expanded: got %q want %q", got, want)
+	}
+	if got := s.Buckets["abs"].Path; got != "/srv/abs" {
+		t.Errorf("absolute path changed: %q", got)
+	}
+}
+
 func TestValidateExecBucketMustBeRO(t *testing.T) {
 	s := Server{
 		Listen:         ":1",

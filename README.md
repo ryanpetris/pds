@@ -16,9 +16,9 @@ Two binaries:
 
 ### Buckets
 
-A bucket is a named storage area mapped to a filesystem path. `mode: ro` (default) is
-read-only; `mode: rw` also accepts pushes. Writable buckets have two independent
-flags:
+A bucket is a named storage area mapped to a filesystem path (a leading `~` expands
+to the home of the user `pdsd` runs as). `mode: ro` (default) is read-only;
+`mode: rw` also accepts pushes. Writable buckets have two independent flags:
 
 - **`versioned`** — every push is stored as `yyyyMMddHHmmss.<ext>` and `latest.<ext>`
   is repointed at it. **Nothing is ever pruned.** Non-versioned buckets overwrite a
