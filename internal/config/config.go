@@ -16,6 +16,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -75,6 +76,71 @@ type Server struct {
 type ClientEntry struct {
 	Host string   `yaml:"host"`
 	Keys []string `yaml:"keys"`
+}
+
+// ifacePrefix marks a listen value as a network interface to track dynamically
+// (e.g. "iface:eth0:2222") rather than a literal address or hostname. An explicit
+// marker is required because an interface name and a hostname can collide (e.g.
+// "tailscale0") and the interface may not exist yet when pdsd starts, so the two
+// cannot be told apart by inspection.
+const ifacePrefix = "iface:"
+
+// EndpointSpec is the parsed form of a listen value. A static endpoint binds a
+// fixed address once (passed straight to net.Listen, covering ":port", IP
+// literals, and hostnames). An interface endpoint instead tracks a named
+// interface's addresses over time.
+type EndpointSpec struct {
+	Iface string // "" => static; otherwise the interface name to track
+	Addr  string // static: the full host:port handed to net.Listen
+	Port  string // interface: the port joined with each interface address
+}
+
+// Static reports whether the endpoint binds a fixed address rather than tracking
+// a network interface.
+func (e EndpointSpec) Static() bool { return e.Iface == "" }
+
+// parseEndpoint classifies a listen value. With the iface: prefix it names an
+// interface to track; otherwise it is a static address or hostname bound once.
+func parseEndpoint(value string) (EndpointSpec, error) {
+	if rest, ok := strings.CutPrefix(value, ifacePrefix); ok {
+		name, port, err := net.SplitHostPort(rest)
+		if err != nil {
+			return EndpointSpec{}, fmt.Errorf("interface listen %q: %w", value, err)
+		}
+		if name == "" {
+			return EndpointSpec{}, fmt.Errorf("interface listen %q: missing interface name", value)
+		}
+		if strings.ContainsAny(name, "/%[]") {
+			return EndpointSpec{}, fmt.Errorf("interface listen %q: invalid interface name %q", value, name)
+		}
+		if _, err := net.LookupPort("tcp", port); err != nil {
+			return EndpointSpec{}, fmt.Errorf("interface listen %q: invalid port %q", value, port)
+		}
+		return EndpointSpec{Iface: name, Port: port}, nil
+	}
+	// Static: require a host:port shape with a port. The host (IP, hostname, or
+	// empty for all interfaces) is left for net.Listen to resolve and bind.
+	_, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return EndpointSpec{}, fmt.Errorf("listen %q: %w", value, err)
+	}
+	if port == "" {
+		return EndpointSpec{}, fmt.Errorf("listen %q: missing port", value)
+	}
+	return EndpointSpec{Addr: value}, nil
+}
+
+// ListenEndpoint returns the parsed primary (SSH/SFTP) listen endpoint.
+func (s *Server) ListenEndpoint() (EndpointSpec, error) { return parseEndpoint(s.Listen) }
+
+// HTTPEndpoint returns the parsed read-only HTTP endpoint and whether one is
+// configured at all.
+func (s *Server) HTTPEndpoint() (EndpointSpec, bool, error) {
+	if s.HTTPListen == "" {
+		return EndpointSpec{}, false, nil
+	}
+	spec, err := parseEndpoint(s.HTTPListen)
+	return spec, true, err
 }
 
 // Bucket is one named storage area. mode "ro" (default) is read-only; "rw" also
@@ -166,8 +232,16 @@ func (s *Server) Validate() error {
 	if s.Listen == "" {
 		return fmt.Errorf("config: listen is required")
 	}
-	if s.HTTPListen != "" && !s.AllowAnonymous {
-		return fmt.Errorf("config: httpListen requires allowAnonymous: true (HTTP is unauthenticated read-only access)")
+	if _, err := parseEndpoint(s.Listen); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if s.HTTPListen != "" {
+		if !s.AllowAnonymous {
+			return fmt.Errorf("config: httpListen requires allowAnonymous: true (HTTP is unauthenticated read-only access)")
+		}
+		if _, err := parseEndpoint(s.HTTPListen); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
 	}
 	if len(s.AuthorizedKeys) == 0 && !s.AllowAnonymous {
 		return fmt.Errorf("config: at least one authorizedKeys entry is required (or set allowAnonymous: true)")

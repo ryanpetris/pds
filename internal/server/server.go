@@ -86,48 +86,71 @@ func New(cfg *config.Server, signers []ssh.Signer) (*Server, error) {
 	}, nil
 }
 
-// ListenAndServe listens on the configured address and serves connections until a
-// listener errors. When httpListen is configured it also serves read-only HTTP on that
-// address concurrently; either listener failing tears down the other and returns.
+// ListenAndServe serves connections on the configured SSH/SFTP endpoint and, when
+// httpListen is set, the read-only HTTP endpoint concurrently. Either endpoint may
+// bind a fixed address/hostname (bound once, fatal on failure) or track a network
+// interface's addresses over time (see iface: in the config). Either endpoint
+// failing tears down the other and returns.
 func (s *Server) ListenAndServe() error {
-	ln, err := net.Listen("tcp", s.cfg.Listen)
+	var groups []*listenGroup
+	var ticks []<-chan time.Time
+	var stops []func()
+	defer func() {
+		for _, stop := range stops {
+			stop()
+		}
+	}()
+
+	add := func(spec config.EndpointSpec, prepare func(net.Listener) (func() error, func())) {
+		g := &listenGroup{
+			name:    spec.Iface, // "" for a static endpoint
+			listen:  func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) },
+			prepare: prepare,
+			now:     time.Now,
+		}
+		var tick <-chan time.Time
+		if spec.Static() {
+			g.src = func() ([]string, error) { return []string{spec.Addr}, nil }
+		} else {
+			g.src = interfaceAddrs(spec.Iface, spec.Port, usable)
+			g.grace = ifaceGrace
+			t := time.NewTicker(ifacePollInterval)
+			stops = append(stops, t.Stop)
+			tick = t.C
+		}
+		groups = append(groups, g)
+		ticks = append(ticks, tick)
+	}
+
+	lspec, err := s.cfg.ListenEndpoint()
 	if err != nil {
 		return err
 	}
-	log.Printf("pdsd listening on %s", ln.Addr())
+	// SSH/SFTP: serve the accept loop; teardown just closes the listener.
+	add(lspec, func(ln net.Listener) (func() error, func()) {
+		return func() error { return s.Serve(ln) }, func() { _ = ln.Close() }
+	})
 
-	var hln net.Listener
-	if s.cfg.HTTPListen != "" {
-		hln, err = net.Listen("tcp", s.cfg.HTTPListen)
-		if err != nil {
-			ln.Close()
-			return err
-		}
-		log.Printf("pdsd serving read-only HTTP on %s", hln.Addr())
+	hspec, ok, err := s.cfg.HTTPEndpoint()
+	if err != nil {
+		return err
+	}
+	if ok {
+		add(hspec, s.httpPrepare)
 	}
 
-	return s.serve(ln, hln)
+	return runGroups(groups, ticks)
 }
 
-// serve runs the SSH accept loop on ln and, when hln is non-nil, read-only HTTP on hln.
-// It returns as soon as either stops serving and closes both, so neither listener is left
-// running without the other.
-func (s *Server) serve(ln, hln net.Listener) error {
-	errc := make(chan error, 2)
-	go func() { errc <- s.Serve(ln) }()
-
-	var httpSrv *http.Server
-	if hln != nil {
-		httpSrv = &http.Server{Handler: s.HTTPHandler(), ReadHeaderTimeout: handshakeTimeout}
-		go func() { errc <- httpSrv.Serve(hln) }()
-	}
-
-	err := <-errc
-	ln.Close()
-	if httpSrv != nil {
-		_ = httpSrv.Close()
-	}
-	return err
+// httpPrepare gives one HTTP listener its own read-only http.Server. The returned
+// serve runs that server; the returned close shuts it down, ending its active
+// connections (a plain listener Close would leave accepted requests running). The
+// server is built here, synchronously, so tearing a listener down — an address
+// removed, or the whole endpoint stopping — never races server registration, and
+// each address's connections are closed without disturbing the others.
+func (s *Server) httpPrepare(ln net.Listener) (serve func() error, closeFn func()) {
+	srv := &http.Server{Handler: s.HTTPHandler(), ReadHeaderTimeout: handshakeTimeout}
+	return func() error { return srv.Serve(ln) }, func() { _ = srv.Close() }
 }
 
 // HTTPHandler returns the read-only HTTP handler that serves bucket contents as an

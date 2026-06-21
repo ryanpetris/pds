@@ -136,7 +136,7 @@ identities:                      # optional; defaults to ~/.ssh/id_*
 ### `pdsd` (server) — `pds/server/config.yaml`
 
 ```yaml
-listen: ":2222"
+listen: ":2222"                  # ":port" (all), an IP literal, a hostname, or "iface:<name>:port"
 httpListen: ":8080"              # optional; read-only HTTP on its own port (requires allowAnonymous)
 execBucket: scripts              # optional; exposed as .pds/exec — MUST be a mode:ro bucket
 allowAnonymous: false            # optional; allow keyless read-only clients (user "anonymous")
@@ -158,6 +158,18 @@ buckets:
     extension: yaml
     validator: yaml              # yaml | json | jsonl | none
 ```
+
+`listen` and `httpListen` accept four forms: `":2222"` (all interfaces), an IP
+literal (`"127.0.0.1:2222"`, `"[::1]:2222"`), a hostname (`"host.example:2222"`),
+or `"iface:<name>:<port>"` to track a network interface. The first three are
+bound once and pdsd exits if the bind fails. The `iface:` form binds the named
+interface's current addresses and keeps them in sync as addresses come and go
+(e.g. a VPN like `tailscale0` coming up); link-local addresses are skipped. If the
+interface has no usable address — missing, down, or not yet assigned at startup —
+pdsd waits up to 60 seconds for one to appear, then exits. The explicit `iface:`
+marker is required because an interface name can also be a valid hostname.
+Tracking interface addresses requires the systemd unit to allow `AF_NETLINK` (the
+shipped `packaging/systemd/pdsd@.service` already does).
 
 Server host keys are read from `~/.ssh/id_*` (override the directory with
 `-ssh-dir`). Passphrase-protected keys are skipped with a warning.

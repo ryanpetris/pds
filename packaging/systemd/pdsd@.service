@@ -35,7 +35,7 @@ LockPersonality=yes
 RestrictNamespaces=yes
 # Pure-Go, no cgo: W^X is safe.
 MemoryDenyWriteExecute=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @obsolete

@@ -246,3 +246,61 @@ func TestValidateHTTPRequiresAnonymous(t *testing.T) {
 		t.Fatalf("httpListen with allowAnonymous should validate: %v", err)
 	}
 }
+
+func TestParseEndpoint(t *testing.T) {
+	ok := []struct {
+		in   string
+		want EndpointSpec
+	}{
+		{":2222", EndpointSpec{Addr: ":2222"}},
+		{"127.0.0.1:2222", EndpointSpec{Addr: "127.0.0.1:2222"}},
+		{"[::1]:2222", EndpointSpec{Addr: "[::1]:2222"}},
+		{"myhost.example:2222", EndpointSpec{Addr: "myhost.example:2222"}}, // hostname stays static
+		{"iface:eth0:2222", EndpointSpec{Iface: "eth0", Port: "2222"}},
+		{"iface:tailscale0:443", EndpointSpec{Iface: "tailscale0", Port: "443"}},
+	}
+	for _, c := range ok {
+		got, err := parseEndpoint(c.in)
+		if err != nil {
+			t.Errorf("parseEndpoint(%q) error: %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("parseEndpoint(%q) = %+v, want %+v", c.in, got, c.want)
+		}
+		if got.Static() != (c.want.Iface == "") {
+			t.Errorf("parseEndpoint(%q).Static() = %v", c.in, got.Static())
+		}
+	}
+
+	bad := []string{
+		"2222",            // no port separator
+		":",               // missing port
+		"iface:eth0",      // interface with no port
+		"iface::2222",     // interface with no name
+		"iface:",          // empty
+		"iface:e:t:h0:22", // name with colons survives SplitHostPort oddly -> invalid
+	}
+	for _, in := range bad {
+		if _, err := parseEndpoint(in); err == nil {
+			t.Errorf("parseEndpoint(%q) should have errored", in)
+		}
+	}
+}
+
+func TestServerEndpointAccessors(t *testing.T) {
+	s := &Server{Listen: "iface:eth0:2222", HTTPListen: ""}
+	l, err := s.ListenEndpoint()
+	if err != nil || l.Iface != "eth0" || l.Port != "2222" {
+		t.Fatalf("ListenEndpoint = %+v, %v", l, err)
+	}
+	if _, ok, _ := s.HTTPEndpoint(); ok {
+		t.Errorf("HTTPEndpoint should report not configured when httpListen is empty")
+	}
+
+	s.HTTPListen = "iface:eth0:8080"
+	h, ok, err := s.HTTPEndpoint()
+	if err != nil || !ok || h.Iface != "eth0" || h.Port != "8080" {
+		t.Fatalf("HTTPEndpoint = %+v, ok=%v, err=%v", h, ok, err)
+	}
+}

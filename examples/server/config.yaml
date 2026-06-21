@@ -9,9 +9,25 @@
 
 listen: ":2222"
 
+# `listen` (and `httpListen` below) accept three forms:
+#   ":2222"            — all interfaces on this port
+#   "127.0.0.1:2222"   — a specific IP (IPv6 as "[::1]:2222")
+#   "myhost:2222"      — a hostname, resolved and bound once at startup
+#   "iface:eth0:2222"  — track a network interface's addresses (see below)
+# The first three are bound once; if the bind fails, pdsd exits.
+#
+# The "iface:" form binds the current addresses of the named interface and keeps
+# them in sync as addresses come and go (e.g. a VPN like tailscale0 coming up).
+# Link-local addresses are skipped. If the interface has no usable address —
+# missing, down, or not yet assigned at startup — pdsd waits up to 60 seconds for
+# one to appear and then exits. The explicit "iface:" marker is required because an
+# interface name can also be a valid hostname. Tracking interface addresses needs
+# the systemd unit to allow AF_NETLINK (see packaging/systemd/pdsd@.service).
+
 # Optional. When set, pdsd also serves the buckets read-only over plain HTTP on this
-# address (its own port; SSH is unaffected). HTTP is unauthenticated, so it REQUIRES
-# allowAnonymous: true below — otherwise pdsd exits at startup. Leave unset to disable.
+# address (its own port; SSH is unaffected; same address forms as `listen`). HTTP is
+# unauthenticated, so it REQUIRES allowAnonymous: true below — otherwise pdsd exits
+# at startup. Leave unset to disable.
 # httpListen: ":8080"
 
 # Optional. Exposed to clients as the .pds/exec alias and used by `pds exec`.
