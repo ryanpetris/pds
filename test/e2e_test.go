@@ -50,6 +50,11 @@ func genKey(t *testing.T, dir, name string) keypair {
 
 // harness starts a server and returns the endpoint plus the host/client keys.
 func harness(t *testing.T) (endpoint string, host, clientKey keypair, dataDir string) {
+	return harnessWith(t, func(*config.Server) {})
+}
+
+// harnessWith is harness with a hook to tweak the server config before it starts.
+func harnessWith(t *testing.T, tweak func(*config.Server)) (endpoint string, host, clientKey keypair, dataDir string) {
 	t.Helper()
 	keyDir := t.TempDir()
 	dataDir = t.TempDir()
@@ -77,6 +82,7 @@ func harness(t *testing.T) (endpoint string, host, clientKey keypair, dataDir st
 			"metrics": {Path: metrics, Mode: "rw", Versioned: true, ByHost: true, Extension: "yaml", Validator: "yaml"},
 		},
 	}
+	tweak(cfg)
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +103,15 @@ func harness(t *testing.T) (endpoint string, host, clientKey keypair, dataDir st
 func dial(t *testing.T, endpoint string, trusted []string, identity string) (*client.Client, error) {
 	t.Helper()
 	cfg := &config.Client{Endpoint: endpoint, TrustedKeys: trusted, Identities: []string{identity}}
+	return client.Dial(cfg)
+}
+
+// dialAnon dials with no SSH key at all: HOME is pointed at an empty dir so there are
+// no ~/.ssh/id_* identities, exercising the no-key -> anonymous path in Dial.
+func dialAnon(t *testing.T, endpoint string, trusted []string) (*client.Client, error) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Client{Endpoint: endpoint, TrustedKeys: trusted}
 	return client.Dial(cfg)
 }
 
@@ -165,6 +180,89 @@ func TestHappyPath(t *testing.T) {
 	// read-only bucket rejects push
 	if err := c.Push("scripts", strings.NewReader("x")); err == nil {
 		t.Errorf("push to ro bucket should be rejected")
+	}
+}
+
+func TestAnonymousReadOnly(t *testing.T) {
+	endpoint, host, clientKey, _ := harnessWith(t, func(c *config.Server) {
+		c.AllowAnonymous = true
+	})
+
+	// Anonymous clients connect without a key and can read.
+	anon, err := dialAnon(t, endpoint, []string{host.pubLine})
+	if err != nil {
+		t.Fatalf("anonymous dial: %v", err)
+	}
+	defer anon.Close()
+
+	var b bytes.Buffer
+	if err := anon.Pull(".pds/exec/hello.sh", &b); err != nil {
+		t.Fatalf("anonymous pull: %v", err)
+	}
+	if !strings.Contains(b.String(), "echo hi") {
+		t.Errorf("anonymous pull content = %q", b.String())
+	}
+	b.Reset()
+	if err := anon.Ls("/", &b); err != nil {
+		t.Fatalf("anonymous ls: %v", err)
+	}
+	if !strings.Contains(b.String(), "scripts/") {
+		t.Errorf("anonymous ls root = %q", b.String())
+	}
+
+	// ...but cannot push.
+	if err := anon.Push("metrics", strings.NewReader("a: 1\n")); err == nil {
+		t.Errorf("anonymous push should be rejected")
+	}
+	// ...and have no .self host directory.
+	b.Reset()
+	if err := anon.Pull("metrics/.self/latest.yaml", &b); err == nil {
+		t.Errorf("anonymous .self access should fail")
+	}
+
+	// Authenticated clients still keep their host identity (push works) even with
+	// anonymous access enabled.
+	c, err := dial(t, endpoint, []string{host.pubLine}, clientKey.pemPath)
+	if err != nil {
+		t.Fatalf("authenticated dial: %v", err)
+	}
+	defer c.Close()
+	if err := c.Push("metrics", strings.NewReader("a: 1\n")); err != nil {
+		t.Fatalf("authenticated push: %v", err)
+	}
+}
+
+func TestAnonymousDisabledByDefault(t *testing.T) {
+	endpoint, host, _, _ := harness(t)
+	if _, err := dialAnon(t, endpoint, []string{host.pubLine}); err == nil {
+		t.Fatalf("anonymous dial should fail when allowAnonymous is unset")
+	}
+}
+
+// An unauthorized key against an anonymous-enabled server falls back to read-only
+// anonymous access rather than failing.
+func TestAnonymousFallback(t *testing.T) {
+	endpoint, host, _, _ := harnessWith(t, func(c *config.Server) {
+		c.AllowAnonymous = true
+	})
+	stranger := genKey(t, t.TempDir(), "stranger")
+
+	c, err := dial(t, endpoint, []string{host.pubLine}, stranger.pemPath)
+	if err != nil {
+		t.Fatalf("expected fallback to anonymous to succeed, got: %v", err)
+	}
+	defer c.Close()
+
+	var b bytes.Buffer
+	if err := c.Pull(".pds/exec/hello.sh", &b); err != nil {
+		t.Fatalf("fallback read: %v", err)
+	}
+	if !strings.Contains(b.String(), "echo hi") {
+		t.Errorf("fallback read content = %q", b.String())
+	}
+	// Fallback access is read-only.
+	if err := c.Push("metrics", strings.NewReader("a: 1\n")); err == nil {
+		t.Errorf("fallback client should not be able to push")
 	}
 }
 

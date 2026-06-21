@@ -17,3 +17,7 @@ trustedKeys:
 # Optional; defaults to ~/.ssh/id_* if omitted.
 # identities:
 #   - ~/.ssh/id_ed25519
+
+# If no key authenticates (none configured, or the server rejects it) and the server
+# has allowAnonymous: true, pds automatically retries read-only as the "anonymous"
+# user. A host-key mismatch or network failure never triggers this fallback.

@@ -66,6 +66,20 @@ Each authorized client public key maps to a **host name** in the server config. 
 `byHost` bucket the server files a push under that host automatically — a host cannot
 push anywhere else. Reads are open: any authorized client may read any path.
 
+### Anonymous (read-only) access
+
+Setting `allowAnonymous: true` on the server lets clients connect **without a key**.
+Anonymous clients are strictly read-only: they may read any bucket but cannot push and
+have no `.self` host directory. They connect as the reserved SSH user `anonymous`.
+Authenticated clients are unaffected — they keep using their key and host identity. With
+`allowAnonymous` set, `authorizedKeys` becomes optional (a server can be
+anonymous-read-only only).
+
+`pds` reaches this automatically: it tries key authentication first and, if the server
+**rejects the credentials** (or no key is configured), retries read-only as `anonymous`,
+printing a notice to stderr. The fallback fires *only* on a credentials rejection — a
+host-key mismatch (possible MITM) or a network error always aborts, never downgrades.
+
 ## Configuration
 
 Config is loaded systemd-style from three tiers, lowest to highest precedence:
@@ -101,6 +115,7 @@ identities:                      # optional; defaults to ~/.ssh/id_*
 ```yaml
 listen: ":2222"
 execBucket: scripts              # optional; exposed as .pds/exec — MUST be a mode:ro bucket
+allowAnonymous: false            # optional; allow keyless read-only clients (user "anonymous")
 authorizedKeys:               # client public key -> host name
   - host: web01
     keys:
@@ -158,7 +173,9 @@ go test ./...
 ## Security notes
 
 - Clients pin server host keys; an untrusted host key aborts the connection.
-- Every connection requires an authorized client key; reads and pushes both require it.
+- By default every connection requires an authorized client key; reads and pushes both
+  require it. Enabling `allowAnonymous` opens reads to keyless clients but never writes —
+  anonymous connections cannot push and have no host identity.
 - All paths are confined to their bucket; symlinks that escape are rejected.
 - A pushed file's extension is dictated by the bucket, never the client.
 - Pushes are validated, written to a temp file, and atomically renamed, so a partial

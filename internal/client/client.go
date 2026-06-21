@@ -4,6 +4,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -24,8 +25,16 @@ type Client struct {
 	sftp     *sftp.Client
 }
 
+// errUntrustedHostKey is the sentinel returned by the host-key callback when the
+// server's key is not in the trusted pool. It lets Dial tell a host-key rejection
+// (possible MITM — never fall back) apart from a credentials rejection.
+var errUntrustedHostKey = errors.New("untrusted server host key")
+
 // Dial connects to the configured endpoint (PDS_ENDPOINT overrides), verifying the
-// server host key against the trusted pool and authenticating with SSH identities.
+// server host key against the trusted pool. It authenticates with the user's SSH
+// identities and, if the server rejects them (or none are available), automatically
+// retries read-only as the anonymous user. A host-key mismatch or network failure is
+// never downgraded — those abort.
 func Dial(cfg *config.Client) (*Client, error) {
 	endpoint := cfg.Endpoint
 	if v := os.Getenv("PDS_ENDPOINT"); v != "" {
@@ -36,29 +45,56 @@ func Dial(cfg *config.Client) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	hostKey := func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		if sshkeys.Trusted(trusted, key) {
+			return nil
+		}
+		return fmt.Errorf("%w %s", errUntrustedHostKey, ssh.FingerprintSHA256(key))
+	}
+
 	signers, err := loadIdentities(cfg.Identities)
 	if err != nil {
 		return nil, err
 	}
-	if len(signers) == 0 {
-		return nil, fmt.Errorf("no usable SSH identities (check identities or ~/.ssh/id_*)")
+	if len(signers) > 0 {
+		c, err := dialSSH(endpoint, keyConfig(signers, hostKey))
+		if err == nil {
+			return c, nil
+		}
+		// Only downgrade to anonymous when the server rejected our credentials —
+		// never on a host-key mismatch or a network error.
+		if errors.Is(err, errUntrustedHostKey) || !authRejected(err) {
+			return nil, err
+		}
+		fmt.Fprintln(os.Stderr, "pds: key authentication rejected; connecting anonymously (read-only)")
 	}
+	return dialSSH(endpoint, anonConfig(hostKey))
+}
 
+// keyConfig builds a client config that authenticates by public key as the local user.
+func keyConfig(signers []ssh.Signer, hostKey ssh.HostKeyCallback) *ssh.ClientConfig {
 	user := os.Getenv("USER")
 	if user == "" {
 		user = "pds"
 	}
-	sshCfg := &ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signers...)},
-		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-			if sshkeys.Trusted(trusted, key) {
-				return nil
-			}
-			return fmt.Errorf("untrusted server host key %s", ssh.FingerprintSHA256(key))
-		},
+	return &ssh.ClientConfig{
+		User:            user,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signers...)},
+		HostKeyCallback: hostKey,
 	}
+}
 
+// anonConfig builds a keyless client config; the server's anonymous fallback keys off
+// the reserved user name.
+func anonConfig(hostKey ssh.HostKeyCallback) *ssh.ClientConfig {
+	return &ssh.ClientConfig{
+		User:            config.AnonymousUser,
+		HostKeyCallback: hostKey,
+	}
+}
+
+// dialSSH establishes one SSH connection with the given config and opens SFTP over it.
+func dialSSH(endpoint string, sshCfg *ssh.ClientConfig) (*Client, error) {
 	conn, err := ssh.Dial("tcp", endpoint, sshCfg)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", endpoint, err)
@@ -69,6 +105,12 @@ func Dial(cfg *config.Client) (*Client, error) {
 		return nil, err
 	}
 	return &Client{endpoint: endpoint, ssh: conn, sftp: sc}, nil
+}
+
+// authRejected reports whether err is the SSH client's "no auth method succeeded"
+// failure (as opposed to a transport/host-key/network error).
+func authRejected(err error) bool {
+	return strings.Contains(err.Error(), "unable to authenticate")
 }
 
 // Close releases the connection.

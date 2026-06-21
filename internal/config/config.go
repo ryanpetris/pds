@@ -45,6 +45,12 @@ const (
 	NameExec = "exec" // child of .pds
 )
 
+// AnonymousUser is the SSH user name an unauthenticated client connects as. The
+// server's anonymous fallback only accepts the "none" auth method for this user, so
+// authenticated clients (which use any other user name) still fall through to public-
+// key auth and keep their host identity.
+const AnonymousUser = "anonymous"
+
 // Client is the pds configuration.
 type Client struct {
 	Endpoint    string   `yaml:"endpoint"`
@@ -56,6 +62,7 @@ type Client struct {
 type Server struct {
 	Listen         string            `yaml:"listen"`
 	AuthorizedKeys []ClientEntry     `yaml:"authorizedKeys"`
+	AllowAnonymous bool              `yaml:"allowAnonymous"`
 	ExecBucket     string            `yaml:"execBucket"`
 	Buckets        map[string]Bucket `yaml:"buckets"`
 }
@@ -137,8 +144,8 @@ func (s *Server) Validate() error {
 	if s.Listen == "" {
 		return fmt.Errorf("config: listen is required")
 	}
-	if len(s.AuthorizedKeys) == 0 {
-		return fmt.Errorf("config: at least one authorizedKeys entry is required")
+	if len(s.AuthorizedKeys) == 0 && !s.AllowAnonymous {
+		return fmt.Errorf("config: at least one authorizedKeys entry is required (or set allowAnonymous: true)")
 	}
 	for i, ce := range s.AuthorizedKeys {
 		if ce.Host == "" {

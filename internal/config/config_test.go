@@ -172,6 +172,19 @@ func TestValidateExtension(t *testing.T) {
 	}
 }
 
+func TestValidateAnonymousReplacesAuthorizedKeys(t *testing.T) {
+	// No authorizedKeys and no allowAnonymous: must fail.
+	s := &Server{Listen: ":1"}
+	if err := s.Validate(); err == nil {
+		t.Fatalf("server without authorizedKeys or allowAnonymous must fail")
+	}
+	// allowAnonymous alone satisfies the auth requirement.
+	s.AllowAnonymous = true
+	if err := s.Validate(); err != nil {
+		t.Fatalf("allowAnonymous-only server should validate: %v", err)
+	}
+}
+
 func TestValidateClientRequired(t *testing.T) {
 	if err := (&Client{}).Validate(); err == nil {
 		t.Fatalf("empty client config must fail")

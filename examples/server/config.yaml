@@ -13,6 +13,12 @@ listen: ":2222"
 # MUST reference a mode:ro bucket, or pdsd exits at startup.
 execBucket: scripts
 
+# Allow unauthenticated clients (no SSH key) to connect read-only: they can read
+# any bucket but cannot push, and have no .self host directory. Such clients must
+# connect as SSH user "anonymous" (pds does this with `anonymous: true`). Default
+# false. When true, authorizedKeys becomes optional.
+allowAnonymous: false
+
 # Map each authorized client public key to the host name it acts as. byHost
 # buckets file that host's pushes automatically. Multiple keys per host allowed.
 authorizedKeys:

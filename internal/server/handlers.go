@@ -20,11 +20,12 @@ import (
 type handlers struct {
 	cfg       *config.Server
 	host      string
+	readOnly  bool // anonymous connection: reads only, no host identity
 	committer *store.Committer
 }
 
-func newHandlers(cfg *config.Server, host string, committer *store.Committer) *handlers {
-	return &handlers{cfg: cfg, host: host, committer: committer}
+func newHandlers(cfg *config.Server, host string, readOnly bool, committer *store.Committer) *handlers {
+	return &handlers{cfg: cfg, host: host, readOnly: readOnly, committer: committer}
 }
 
 // resolved is the outcome of mapping a virtual path to a bucket + subpath, with
@@ -91,9 +92,10 @@ func (h *handlers) resolve(p string) (resolved, error) {
 		}
 	}
 
-	// .self -> caller's host dir (byHost buckets only).
+	// .self -> caller's host dir (byHost buckets only; anonymous clients have no
+	// host, so .self does not exist for them).
 	if len(rest) > 0 && rest[0] == config.NameSelf {
-		if !bucket.ByHost {
+		if !bucket.ByHost || h.host == "" {
 			return resolved{}, os.ErrNotExist
 		}
 		rest = append([]string{h.host}, rest[1:]...)
@@ -125,6 +127,9 @@ func (h *handlers) Fileread(req *sftp.Request) (io.ReaderAt, error) {
 // Filewrite accepts pushes: only <bucket>/.push on a writable bucket. It returns a
 // buffering writer that validates and commits on Close.
 func (h *handlers) Filewrite(req *sftp.Request) (io.WriterAt, error) {
+	if h.readOnly {
+		return nil, os.ErrPermission
+	}
 	r, err := h.resolve(req.Filepath)
 	if err != nil {
 		return nil, err
@@ -182,7 +187,7 @@ func (h *handlers) list(p string) (sftp.ListerAt, error) {
 	if r.sub == "" || r.sub == "." {
 		mb, _ := store.Meta(r.bucket)
 		infos = append(infos, vinfo{name: config.NameMeta, size: int64(len(mb)), mode: 0o444})
-		if r.bucket.ByHost {
+		if r.bucket.ByHost && h.host != "" {
 			infos = append(infos, vinfo{name: config.NameSelf, mode: os.ModeDir | 0o555})
 		}
 	}
