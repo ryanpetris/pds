@@ -83,6 +83,15 @@ jobs:
           tar -C dist/linux-x86_64 -czf dist/pds-linux-x86_64.tar.gz pds pdsd
           tar -C dist/linux-arm64 -czf dist/pds-linux-arm64.tar.gz pds pdsd
 
+      - name: Build Arch package (amd64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Builds pds-<ver>-1-x86_64.pkg.tar.zst inside a clean
+          # archlinux:base-devel container and copies it to the repo root.
+          # ubuntu-latest ships Docker, so no extra setup is needed.
+          make arch-pkg
+
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -90,6 +99,7 @@ jobs:
           path: |
             dist/pds-linux-x86_64.tar.gz
             dist/pds-linux-arm64.tar.gz
+            pds-*-x86_64.pkg.tar.zst
 
       - name: Publish release
         env:
@@ -101,6 +111,7 @@ jobs:
           assets=(
             dist/pds-linux-x86_64.tar.gz
             dist/pds-linux-arm64.tar.gz
+            pds-*-x86_64.pkg.tar.zst
             dist/coverage.out
             dist/coverage.txt
             dist/coverage.html
