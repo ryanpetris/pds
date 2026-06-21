@@ -77,8 +77,9 @@ func (c *Client) Meta(bucket string, w io.Writer) error {
 }
 
 // Exec pulls a script from the .pds/exec alias, writes it to a temp file with the
-// execute bit set, and runs it with argv[0]=name and the given args. PDS_ENDPOINT is
-// exported so the script can re-invoke pds. It returns the script's exit code.
+// execute bit set, and runs it with argv[0] set to the script's base name and the
+// given args. PDS_ENDPOINT is exported so the script can re-invoke pds. It returns
+// the script's exit code.
 func (c *Client) Exec(name string, args []string) (int, error) {
 	remote := path.Join("/", config.NamePDS, config.NameExec, name)
 	src, err := c.sftp.Open(remote)
@@ -87,12 +88,21 @@ func (c *Client) Exec(name string, args []string) (int, error) {
 	}
 	defer src.Close()
 
-	tmp, err := os.CreateTemp("", "pds-exec-*")
+	// Run inside a temp dir and name the file after the script. For shebang
+	// scripts the kernel re-execs the interpreter with the script's path, so
+	// that path (its base name) becomes $0 — naming the file is what controls
+	// it; cmd.Args[0] alone is discarded by the interpreter.
+	base := path.Base(name)
+	dir, err := os.MkdirTemp("", "pds-exec-")
 	if err != nil {
 		return 1, err
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer os.RemoveAll(dir)
+	tmpName := path.Join(dir, base)
+	tmp, err := os.OpenFile(tmpName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o700)
+	if err != nil {
+		return 1, err
+	}
 	if _, err := io.Copy(tmp, src); err != nil {
 		tmp.Close()
 		return 1, err
@@ -100,12 +110,9 @@ func (c *Client) Exec(name string, args []string) (int, error) {
 	if err := tmp.Close(); err != nil {
 		return 1, err
 	}
-	if err := os.Chmod(tmpName, 0o700); err != nil {
-		return 1, err
-	}
 
 	cmd := exec.Command(tmpName)
-	cmd.Args = append([]string{name}, args...)
+	cmd.Args = append([]string{base}, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
