@@ -410,17 +410,17 @@ func TestStaticGroupBindOnceError(t *testing.T) {
 // The shipped system unit must allow AF_NETLINK, or interface-tracking endpoints
 // die at startup when enumerating addresses under the hardened sandbox.
 func TestSystemdUnitAllowsNetlink(t *testing.T) {
-	b, err := os.ReadFile("../../packaging/systemd/pdsd@.service")
+	b, err := os.ReadFile("../../packaging/systemd/pds@.service")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, line := range strings.Split(string(b), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "RestrictAddressFamilies=") {
 			if !strings.Contains(line, "AF_NETLINK") {
-				t.Errorf("pdsd@.service RestrictAddressFamilies must include AF_NETLINK: %q", line)
+				t.Errorf("pds@.service RestrictAddressFamilies must include AF_NETLINK: %q", line)
 			}
 			return
 		}
 	}
-	t.Error("no RestrictAddressFamilies line found in pdsd@.service")
+	t.Error("no RestrictAddressFamilies line found in pds@.service")
 }

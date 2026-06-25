@@ -169,7 +169,7 @@ interface has no usable address — missing, down, or not yet assigned at startu
 pdsd waits up to 60 seconds for one to appear, then exits. The explicit `iface:`
 marker is required because an interface name can also be a valid hostname.
 Tracking interface addresses requires the systemd unit to allow `AF_NETLINK` (the
-shipped `packaging/systemd/pdsd@.service` already does).
+shipped `packaging/systemd/pds@.service` already does).
 
 Server host keys are read from `~/.ssh/id_*` (override the directory with
 `--ssh-dir`). Passphrase-protected keys are skipped with a warning.

@@ -38,8 +38,8 @@ with no tag), then runs `makepkg`. Extra args pass straight through. Requires
 | `/usr/bin/pds`, `/usr/bin/pdsd` | `make build` output |
 | `/usr/share/bash-completion/completions/pds` | `pds completion bash` |
 | `/usr/share/zsh/site-functions/_pds` | `pds completion zsh` |
-| `/usr/lib/systemd/system/pdsd@.service` | `packaging/systemd/pdsd@.service` |
-| `/usr/lib/systemd/user/pdsd.service` | `packaging/systemd/pdsd.service` |
+| `/usr/lib/systemd/system/pds@.service` | `packaging/systemd/pds@.service` |
+| `/usr/lib/systemd/user/pds.service` | `packaging/systemd/pds.service` |
 | `/usr/share/pds/config.server.example.yaml` | `examples/server/config.yaml` |
 | `/usr/share/pds/config.client.example.yaml` | `examples/client/config.yaml` |
 | `/usr/share/doc/pds/README.md` | `README.md` |
@@ -51,12 +51,12 @@ with no tag), then runs `makepkg`. Extra args pass straight through. Requires
 `~/.ssh/id_*`, and config is read from the layered tiers
 (`/usr/lib/pds/server`, `/etc/pds/server`, `~/.config/pds/server`).
 
-- **System-wide, instanced by user** — `pdsd@<user>.service`:
+- **System-wide, instanced by user** — `pds@<user>.service`:
 
   ```sh
   cp /usr/share/pds/config.server.example.yaml /home/petris/.config/pds/server/config.yaml
   # edit it; ensure /home/petris/.ssh holds an id_* host key
-  sudo systemctl enable --now pdsd@petris
+  sudo systemctl enable --now pds@petris
   ```
 
   `User=%i` runs the daemon as that user. `ProtectSystem=full` keeps `/usr` and
@@ -67,7 +67,7 @@ with no tag), then runs `makepkg`. Extra args pass straight through. Requires
 - **Per-user session** — `systemctl --user`:
 
   ```sh
-  systemctl --user enable --now pdsd
+  systemctl --user enable --now pds
   ```
 
 ## Notes

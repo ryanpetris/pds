@@ -22,7 +22,7 @@ sshListen: ":2222"
 # missing, down, or not yet assigned at startup — pdsd waits up to 60 seconds for
 # one to appear and then exits. The explicit "iface:" marker is required because an
 # interface name can also be a valid hostname. Tracking interface addresses needs
-# the systemd unit to allow AF_NETLINK (see packaging/systemd/pdsd@.service).
+# the systemd unit to allow AF_NETLINK (see packaging/systemd/pds@.service).
 
 # Optional. When set, pdsd also serves the buckets read-only over plain HTTP on this
 # address (its own port; SSH is unaffected; same address forms as `sshListen`). HTTP

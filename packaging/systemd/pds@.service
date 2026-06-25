@@ -1,10 +1,10 @@
 [Unit]
-# System-wide pdsd, instanced by the user it runs as: `pdsd@<user>.service`
-# (e.g. `systemctl enable --now pdsd@petris`). The instance name %i is the
+# System-wide pds, instanced by the user it runs as: `pds@<user>.service`
+# (e.g. `systemctl enable --now pds@petris`). The instance name %i is the
 # system user; systemd sets that user's $HOME, so pdsd reads its host keys from
 # ~%i/.ssh/id_* and its config from that user's tier (~%i/.config/pds/server,
 # plus /etc/pds/server and /usr/lib/pds/server).
-Description=PDS server (pdsd) for user %i
+Description=PDS server (pds) for user %i
 Documentation=https://petris.dev/pds
 After=network-online.target
 Wants=network-online.target

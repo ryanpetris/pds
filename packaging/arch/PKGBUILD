@@ -46,10 +46,10 @@ package() {
 		"$pkgdir/usr/share/zsh/site-functions/_pds"
 
 	# Systemd units: system template (instanced by user) + per-user unit.
-	install -Dm0644 packaging/systemd/pdsd@.service \
-		"$pkgdir/usr/lib/systemd/system/pdsd@.service"
-	install -Dm0644 packaging/systemd/pdsd.service \
-		"$pkgdir/usr/lib/systemd/user/pdsd.service"
+	install -Dm0644 packaging/systemd/pds@.service \
+		"$pkgdir/usr/lib/systemd/system/pds@.service"
+	install -Dm0644 packaging/systemd/pds.service \
+		"$pkgdir/usr/lib/systemd/user/pds.service"
 
 	# Example configs (copy into a config tier to use; see README).
 	install -Dm0644 examples/server/config.yaml \
