@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -122,8 +123,58 @@ func serveSSH(t *testing.T, srv *server.Server) string {
 	return ln.Addr().String()
 }
 
-// clientConfig builds a client config from an endpoint string (host:port).
-func clientConfig(t *testing.T, endpoint string, trusted []string) *config.Client {
+// rejectSSH starts a TCP listener that immediately closes every accepted
+// connection. It is a deterministic unavailable SSH endpoint: TCP succeeds,
+// then the SSH version exchange ends with EOF.
+func rejectSSH(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// stallSSH starts a TCP listener that accepts connections but never speaks SSH.
+// It exercises the deadline covering the handshake, not just TCP establishment.
+func stallSSH(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	t.Cleanup(func() {
+		close(stop)
+		ln.Close()
+	})
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				<-stop
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// clientEndpoint converts a host:port string into one structured client endpoint.
+func clientEndpoint(t *testing.T, endpoint string) config.ClientEndpoint {
 	t.Helper()
 	host, portStr, err := net.SplitHostPort(endpoint)
 	if err != nil {
@@ -133,7 +184,16 @@ func clientConfig(t *testing.T, endpoint string, trusted []string) *config.Clien
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &config.Client{Host: host, SSHPort: port, TrustedKeys: trusted}
+	return config.ClientEndpoint{Host: host, SSHPort: port}
+}
+
+// clientConfig builds a client config from an endpoint string (host:port).
+func clientConfig(t *testing.T, endpoint string, trusted []string) *config.Client {
+	t.Helper()
+	return &config.Client{
+		Endpoints:   []config.ClientEndpoint{clientEndpoint(t, endpoint)},
+		TrustedKeys: trusted,
+	}
 }
 
 func dial(t *testing.T, endpoint string, trusted []string, identity string) (*client.Client, error) {
@@ -216,6 +276,125 @@ func TestHappyPath(t *testing.T) {
 	// read-only bucket rejects push
 	if err := c.Push("scripts", strings.NewReader("x")); err == nil {
 		t.Errorf("push to ro bucket should be rejected")
+	}
+}
+
+func TestDialFailsOverToReachableEndpoint(t *testing.T) {
+	t.Setenv("PDS_ENDPOINT", "")
+	live, host, clientKey, _ := harness(t)
+	cfg := &config.Client{
+		Endpoints: []config.ClientEndpoint{
+			clientEndpoint(t, rejectSSH(t)),
+			clientEndpoint(t, live),
+		},
+		TrustedKeys: []string{host.pubLine},
+		Identities:  []string{clientKey.pemPath},
+	}
+
+	c, err := client.Dial(cfg)
+	if err != nil {
+		t.Fatalf("dial with unavailable primary: %v", err)
+	}
+	defer c.Close()
+	var out bytes.Buffer
+	if err := c.Ls("/", &out); err != nil {
+		t.Fatalf("ls through fallback endpoint: %v", err)
+	}
+	if !strings.Contains(out.String(), "scripts/") {
+		t.Fatalf("fallback endpoint returned unexpected listing: %q", out.String())
+	}
+}
+
+func TestExecPinsSelectedFailoverEndpoint(t *testing.T) {
+	t.Setenv("PDS_ENDPOINT", "")
+	live, host, clientKey, dataDir := harness(t)
+	script := filepath.Join(dataDir, "scripts", "check-endpoint.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n[ \"$PDS_ENDPOINT\" = \"$1\" ]\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Client{
+		Endpoints: []config.ClientEndpoint{
+			clientEndpoint(t, rejectSSH(t)),
+			clientEndpoint(t, live),
+		},
+		TrustedKeys: []string{host.pubLine},
+		Identities:  []string{clientKey.pemPath},
+	}
+
+	c, err := client.Dial(cfg)
+	if err != nil {
+		t.Fatalf("dial with unavailable primary: %v", err)
+	}
+	defer c.Close()
+	code, err := c.Exec("check-endpoint.sh", []string{live})
+	if err != nil {
+		t.Fatalf("exec endpoint check: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("exec saw a PDS_ENDPOINT other than selected fallback %q", live)
+	}
+}
+
+func TestDialTimeoutCoversSSHHandshake(t *testing.T) {
+	t.Setenv("PDS_ENDPOINT", "")
+	live, host, clientKey, _ := harness(t)
+	timeout := 100 * time.Millisecond
+	cfg := &config.Client{
+		Endpoints: []config.ClientEndpoint{
+			clientEndpoint(t, stallSSH(t)),
+			clientEndpoint(t, live),
+		},
+		DialTimeout: &timeout,
+		TrustedKeys: []string{host.pubLine},
+		Identities:  []string{clientKey.pemPath},
+	}
+
+	started := time.Now()
+	c, err := client.Dial(cfg)
+	if err != nil {
+		t.Fatalf("dial after stalled SSH handshake: %v", err)
+	}
+	defer c.Close()
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("stalled endpoint failover took %v; deadline did not bound setup", elapsed)
+	}
+}
+
+func TestDialUntrustedPrimaryStopsBeforeHealthyBackup(t *testing.T) {
+	t.Setenv("PDS_ENDPOINT", "")
+	primary, _, _, _ := harness(t)
+	backup, backupHost, backupClientKey, _ := harness(t)
+	cfg := &config.Client{
+		Endpoints: []config.ClientEndpoint{
+			clientEndpoint(t, primary),
+			clientEndpoint(t, backup),
+		},
+		// Trust only the backup. If host-key rejection were treated as
+		// availability failure, this configuration would incorrectly succeed.
+		TrustedKeys: []string{backupHost.pubLine},
+		Identities:  []string{backupClientKey.pemPath},
+	}
+	if _, err := client.Dial(cfg); err == nil {
+		t.Fatal("untrusted primary should abort failover before healthy backup")
+	}
+}
+
+func TestDialUnauthorizedPrimaryStopsBeforeHealthyBackup(t *testing.T) {
+	t.Setenv("PDS_ENDPOINT", "")
+	primary, primaryHost, _, _ := harness(t)
+	backup, backupHost, backupClientKey, _ := harness(t)
+	cfg := &config.Client{
+		Endpoints: []config.ClientEndpoint{
+			clientEndpoint(t, primary),
+			clientEndpoint(t, backup),
+		},
+		TrustedKeys: []string{primaryHost.pubLine, backupHost.pubLine},
+		// The backup accepts this identity; the primary does not. Reaching the
+		// primary and being rejected is terminal rather than a failover signal.
+		Identities: []string{backupClientKey.pemPath},
+	}
+	if _, err := client.Dial(cfg); err == nil {
+		t.Fatal("authentication rejection at primary should abort before healthy backup")
 	}
 }
 
@@ -579,7 +758,10 @@ func TestDialPinsEd25519AgainstMultiHostKeyServer(t *testing.T) {
 // ed25519 host keys).
 func TestDialRejectsNonEd25519TrustedKey(t *testing.T) {
 	_, _, ecdsaLine, _ := hostSignerLines(t)
-	cfg := &config.Client{Host: "127.0.0.1", SSHPort: 1, TrustedKeys: []string{ecdsaLine}}
+	cfg := &config.Client{
+		Endpoints:   []config.ClientEndpoint{{Host: "127.0.0.1", SSHPort: 1}},
+		TrustedKeys: []string{ecdsaLine},
+	}
 	cfg.Identities = []string{genKey(t, t.TempDir(), "client").pemPath}
 	if _, err := client.Dial(cfg); err == nil {
 		t.Fatal("dial with a non-ed25519 trusted key should error")

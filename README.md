@@ -76,9 +76,10 @@ Authenticated clients are unaffected — they keep using their key and host iden
 anonymous-read-only only).
 
 `pds` reaches this automatically: it tries key authentication first and, if the server
-**rejects the credentials** (or no key is configured), retries read-only as `anonymous`,
-printing a notice to stderr. The fallback fires *only* on a credentials rejection — a
-host-key mismatch (possible MITM) or a network error always aborts, never downgrades.
+**rejects the credentials** (or no key is configured), retries read-only as `anonymous`
+on that same endpoint. The anonymous fallback fires *only* on a credentials rejection.
+A network or protocol failure tries the next configured endpoint without downgrading;
+a host-key mismatch (possible MITM) aborts the entire sequence.
 
 ### HTTP read access
 
@@ -98,8 +99,8 @@ curl http://pds.example.com:8080/scripts              # JSON directory listing
 makes every bucket's contents publicly readable by anyone who can reach the port — a
 deliberate, opt-in downgrade of the read-side guarantees. Writes and host identity remain
 SSH-only. For authenticated/encrypted HTTP, front it with a reverse proxy (TLS is out of
-scope). `pds endpoint --http` prints the `http://host:httpPort` URL when `httpPort` is set
-in the client config.
+scope). `pds endpoint --http` prints each configured `http://host:httpPort` URL in
+endpoint order.
 
 ## Configuration
 
@@ -114,24 +115,46 @@ $XDG_CONFIG_HOME/pds/<role>  (per-user; default ~/.config)
 where `<role>` is `client` (for `pds`) or `server` (for `pdsd`). Within each tier,
 `config.yaml` is applied first, then every `config.d/*.yaml` in lexical order (so
 drop-ins override the tier's base). Nothing is required to exist; the merged result
-must simply contain everything required. Maps merge by key, lists are unioned,
-scalars are overridden by the higher tier. An optional `--config FILE` is merged last,
-at the highest precedence.
+must simply contain everything required. Maps merge by key, lists are unioned, and
+scalars are overridden by the higher tier. The client's ordered `endpoints` list is the
+exception: a higher layer replaces it so that layer can choose a new primary. An optional
+`--config FILE` is merged last, at the highest precedence.
 
 On-disk keys are camelCase.
 
 ### `pds` (client) — `pds/client/config.yaml`
 
 ```yaml
-host: pds.example.com            # name, IPv4, or IPv6 literal (e.g. ::1)
-sshPort: 2222                    # SSH endpoint is host:sshPort; PDS_ENDPOINT env overrides it
-httpPort: 8080                   # optional; only for `pds endpoint --http`
+endpoints:                       # attempted from first to last
+  - host: pds-a.example.com      # name, IPv4, or IPv6 literal (e.g. ::1)
+    sshPort: 2222
+    httpPort: 8080               # optional; only for `pds endpoint --http`
+  - host: pds-b.example.com
+    sshPort: 2202
+    httpPort: 8081
+dialTimeout: 10s                 # optional; total setup budget for each endpoint
 trustedKeys:                     # pinned server host keys; any match is accepted
   - ssh-ed25519 AAAA... node1    #   (list every node in a cluster + old keys for rotation)
   - ssh-ed25519 AAAA... node2
 identities:                      # optional; defaults to ~/.ssh/id_*
   - ~/.ssh/id_ed25519
 ```
+
+The client tries endpoints sequentially and uses the first one that completes TCP, SSH
+authentication, and SFTP setup. DNS/TCP failures, timeouts, interrupted SSH setup, and a
+missing or broken SFTP subsystem advance to the next endpoint. An untrusted host key or
+an exhausted authentication rejection is terminal: those prove a server was reached and
+must not be hidden as an availability problem. If every endpoint is unavailable, the
+final error identifies each address and its failure. `PDS_ENDPOINT=host:port` remains a
+singular hard override and disables configured failover for that invocation.
+
+`trustedKeys` remains a union across configuration layers and every accumulated key is
+trusted for every endpoint. Replacing `endpoints` in a higher layer does not revoke keys
+from a lower layer; remove a retired or compromised key from the layer that introduced it.
+
+Failover applies only while establishing the session. Once connected, an operation error
+is returned to the caller; operations—especially `push`—are never replayed on another
+node after an ambiguous disconnect.
 
 ### `pdsd` (server) — `pds/server/config.yaml`
 
@@ -182,7 +205,7 @@ pds [--config FILE] ls   [path]              # default: root
 pds [--config FILE] push <bucket> [FILE|-]   # default: stdin
 pds [--config FILE] meta <bucket>
 pds [--config FILE] exec <name> [args...]
-pds [--config FILE] endpoint [--ssh|--http]  # print host:sshPort (--ssh same), or http://host:httpPort
+pds [--config FILE] endpoint [--ssh|--http]  # print ordered SSH endpoints or configured HTTP URLs
 ```
 
 Flags are GNU-style: `--config` (or `-c`) and `-o`/`--output` for `pull`. A global
@@ -191,8 +214,10 @@ after `exec <name>` is passed to the script untouched.
 
 `pds exec <name> [args...]` pulls `<name>` from the exec bucket, writes it to a temp
 file with the execute bit set, and runs it with `argv[0]` = `<name>` and the given
-arguments. `PDS_ENDPOINT` is exported so the script can re-invoke `pds`. The file is
-assumed executable — there are no extra checks.
+arguments. `PDS_ENDPOINT` is exported with the endpoint that supplied the script so it
+can re-invoke `pds` against the same node. This intentionally pins nested commands rather
+than re-running configured failover. The file is assumed executable — there are no extra
+checks.
 
 Example script-driven workflow:
 
@@ -230,6 +255,8 @@ go test ./...
 ## Security notes
 
 - Clients pin server host keys; an untrusted host key aborts the connection.
+- Client failover handles unavailable endpoints only. It never bypasses an untrusted
+  host key or a server that rejects both configured and anonymous authentication.
 - By default every connection requires an authorized client key; reads and pushes both
   require it. Enabling `allowAnonymous` opens reads to keyless clients but never writes —
   anonymous connections cannot push and have no host identity.

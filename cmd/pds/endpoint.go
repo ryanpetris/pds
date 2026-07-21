@@ -13,7 +13,7 @@ func newEndpointCmd(a *app) *cobra.Command {
 	var wantSSH, wantHTTP bool
 	cmd := &cobra.Command{
 		Use:   "endpoint [--ssh|--http]",
-		Short: "Print the server endpoint (SSH host:port, or HTTP URL)",
+		Short: "Print the ordered server endpoints (SSH host:port, or HTTP URLs)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// endpoint only prints an address: it must not open a connection and
@@ -23,21 +23,20 @@ func newEndpointCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var endpoints []string
 			if wantHTTP {
-				u, err := client.ResolveHTTPURL(cfg)
-				if err != nil {
-					return err
-				}
-				fmt.Println(u)
-				return nil
+				endpoints, err = client.ResolveHTTPURLs(cfg)
+			} else {
+				// The default and --ssh both print protocolless SSH endpoints;
+				// --ssh is the explicit counterpart to --http.
+				endpoints, err = client.ResolveEndpoints(cfg)
 			}
-			// The default and --ssh both print the protocolless SSH endpoint;
-			// --ssh is the explicit counterpart to --http.
-			ep, err := client.ResolveEndpoint(cfg)
 			if err != nil {
 				return err
 			}
-			fmt.Println(ep)
+			for _, endpoint := range endpoints {
+				fmt.Fprintln(cmd.OutOrStdout(), endpoint)
+			}
 			return nil
 		},
 	}

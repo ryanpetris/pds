@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -31,59 +32,147 @@ type Client struct {
 // (possible MITM — never fall back) apart from a credentials rejection.
 var errUntrustedHostKey = errors.New("untrusted server host key")
 
-// ResolveEndpoint returns the SSH endpoint to dial as host:port. PDS_ENDPOINT overrides
-// the configured host/sshPort. IPv6 hosts are bracketed via net.JoinHostPort. It errors
-// if neither PDS_ENDPOINT nor a complete host/sshPort is configured.
-func ResolveEndpoint(cfg *config.Client) (string, error) {
+// errAuthenticationRejected marks an endpoint that was reached but rejected both the
+// configured identities and the anonymous fallback. Trying another endpoint would hide
+// a credentials or server-policy problem, so Dial treats it as terminal.
+var errAuthenticationRejected = errors.New("SSH authentication rejected")
+
+// ResolveEndpoints returns the configured SSH endpoints in attempt order. PDS_ENDPOINT
+// remains a singular hard override, which also keeps pds exec children pinned to the
+// server selected by their parent. IPv6 hosts are bracketed via net.JoinHostPort.
+func ResolveEndpoints(cfg *config.Client) ([]string, error) {
 	if v := os.Getenv("PDS_ENDPOINT"); v != "" {
-		return v, nil
+		return []string{v}, nil
 	}
-	if cfg.Host == "" {
-		return "", fmt.Errorf("host is not configured")
+	if cfg == nil || len(cfg.Endpoints) == 0 {
+		return nil, fmt.Errorf("no endpoints are configured")
 	}
-	if cfg.SSHPort <= 0 {
-		return "", fmt.Errorf("sshPort is not configured")
+
+	endpoints := make([]string, 0, len(cfg.Endpoints))
+	for i, endpoint := range cfg.Endpoints {
+		resolved, err := resolveEndpoint(endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %d: %w", i+1, err)
+		}
+		endpoints = append(endpoints, resolved)
 	}
-	return net.JoinHostPort(normHost(cfg.Host), strconv.Itoa(cfg.SSHPort)), nil
+	return endpoints, nil
 }
 
-// ResolveHTTPURL returns the read-only HTTP base URL (http://host:port) for the server,
-// using the configured httpPort. The host follows PDS_ENDPOINT when set so it tracks the
-// SSH dial target. It errors when httpPort or host is not configured.
-func ResolveHTTPURL(cfg *config.Client) (string, error) {
-	if cfg.HTTPPort <= 0 {
-		return "", fmt.Errorf("httpPort is not configured")
+// ResolveHTTPURLs returns configured read-only HTTP base URLs in endpoint order,
+// omitting endpoints without an HTTP port. Under PDS_ENDPOINT it returns only the URL
+// belonging to the matching configured SSH endpoint; the override cannot safely borrow
+// an HTTP port from a different server.
+func ResolveHTTPURLs(cfg *config.Client) ([]string, error) {
+	if cfg == nil || len(cfg.Endpoints) == 0 {
+		return nil, fmt.Errorf("no endpoints are configured")
 	}
-	host := normHost(cfg.Host)
+
 	if v := os.Getenv("PDS_ENDPOINT"); v != "" {
-		if h, _, err := net.SplitHostPort(v); err == nil {
-			host = h
+		for i, endpoint := range cfg.Endpoints {
+			// HTTP-only entries cannot be the source of an SSH endpoint override.
+			if strings.TrimSpace(endpoint.Host) == "" || endpoint.SSHPort <= 0 || endpoint.SSHPort > 65535 {
+				continue
+			}
+			sshEndpoint, err := resolveEndpoint(endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("endpoint %d: %w", i+1, err)
+			}
+			if !sameEndpoint(v, sshEndpoint) {
+				continue
+			}
+			url, err := resolveHTTPURL(endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("endpoint %d: %w", i+1, err)
+			}
+			return []string{url}, nil
 		}
+		return nil, fmt.Errorf("PDS_ENDPOINT %q does not match a configured endpoint", v)
 	}
-	if host == "" {
+
+	urls := make([]string, 0, len(cfg.Endpoints))
+	for i, endpoint := range cfg.Endpoints {
+		if endpoint.HTTPPort == 0 {
+			continue
+		}
+		url, err := resolveHTTPURL(endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %d: %w", i+1, err)
+		}
+		urls = append(urls, url)
+	}
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("httpPort is not configured for any endpoint")
+	}
+	return urls, nil
+}
+
+func resolveEndpoint(endpoint config.ClientEndpoint) (string, error) {
+	if strings.TrimSpace(endpoint.Host) == "" {
 		return "", fmt.Errorf("host is not configured")
 	}
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(cfg.HTTPPort)), nil
+	if endpoint.SSHPort <= 0 || endpoint.SSHPort > 65535 {
+		return "", fmt.Errorf("sshPort must be between 1 and 65535")
+	}
+	return net.JoinHostPort(normHost(endpoint.Host), strconv.Itoa(endpoint.SSHPort)), nil
+}
+
+func resolveHTTPURL(endpoint config.ClientEndpoint) (string, error) {
+	if strings.TrimSpace(endpoint.Host) == "" {
+		return "", fmt.Errorf("host is not configured")
+	}
+	if endpoint.HTTPPort <= 0 || endpoint.HTTPPort > 65535 {
+		return "", fmt.Errorf("httpPort must be between 1 and 65535")
+	}
+	return "http://" + net.JoinHostPort(normHost(endpoint.Host), strconv.Itoa(endpoint.HTTPPort)), nil
+}
+
+// sameEndpoint compares host:port values semantically so harmless differences such as
+// IPv6 brackets, hostname case, or a leading zero in the port do not break override
+// matching for ResolveHTTPURLs.
+func sameEndpoint(a, b string) bool {
+	ah, ap, err := net.SplitHostPort(a)
+	if err != nil {
+		return false
+	}
+	bh, bp, err := net.SplitHostPort(b)
+	if err != nil {
+		return false
+	}
+	api, err := strconv.Atoi(ap)
+	if err != nil {
+		return false
+	}
+	bpi, err := strconv.Atoi(bp)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(normHost(ah), normHost(bh)) && api == bpi
 }
 
 // normHost strips a single surrounding [...] pair so a config host of "[::1]" or "::1"
 // both work; net.JoinHostPort re-adds brackets for IPv6 as needed.
 func normHost(h string) string {
+	h = strings.TrimSpace(h)
 	if len(h) >= 2 && h[0] == '[' && h[len(h)-1] == ']' {
 		return h[1 : len(h)-1]
 	}
 	return h
 }
 
-// Dial connects to the configured endpoint (PDS_ENDPOINT overrides), verifying the
-// server host key against the trusted pool. Host-key negotiation is pinned to ed25519
-// so the handshake settles on the trusted key rather than whatever Go's defaults prefer
-// (which would otherwise pick an untrusted ecdsa key when the server offers several). It
-// authenticates with the user's SSH identities and, if the server rejects them (or none
-// are available), automatically retries read-only as the anonymous user. A host-key
-// mismatch or network failure is never downgraded — those abort.
+// Dial tries the configured endpoints in order and returns the first usable SSH+SFTP
+// session. Trust and identities are loaded once. Each endpoint gets one absolute
+// deadline covering TCP, SSH authentication (including same-endpoint anonymous
+// fallback), and SFTP startup. Availability and protocol failures advance to the next
+// endpoint; an untrusted host key or exhausted authentication is terminal.
 func Dial(cfg *config.Client) (*Client, error) {
-	endpoint, err := ResolveEndpoint(cfg)
+	if cfg == nil {
+		return nil, fmt.Errorf("client config is nil")
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	endpoints, err := ResolveEndpoints(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -103,18 +192,42 @@ func Dial(cfg *config.Client) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(signers) > 0 {
-		c, err := dialSSH(endpoint, keyConfig(signers, hostKey))
+
+	var endpointErrors []error
+	for _, endpoint := range endpoints {
+		deadline := time.Now().Add(cfg.EffectiveDialTimeout())
+		c, err := dialEndpoint(endpoint, signers, hostKey, deadline)
 		if err == nil {
 			return c, nil
 		}
-		// Only downgrade to anonymous when the server rejected our credentials —
-		// never on a host-key mismatch or a network error.
+		labelled := fmt.Errorf("%s: %w", endpoint, err)
+		if errors.Is(err, errUntrustedHostKey) || errors.Is(err, errAuthenticationRejected) {
+			return nil, labelled
+		}
+		endpointErrors = append(endpointErrors, labelled)
+	}
+	return nil, fmt.Errorf("unable to contact any configured endpoint: %w", errors.Join(endpointErrors...))
+}
+
+// dialEndpoint performs keyed authentication first when identities are available, then
+// retries the anonymous user only when the same server explicitly rejected those keys.
+// Both connections share deadline, so fallback cannot extend the endpoint's budget.
+func dialEndpoint(endpoint string, signers []ssh.Signer, hostKey ssh.HostKeyCallback, deadline time.Time) (*Client, error) {
+	if len(signers) > 0 {
+		c, err := dialSSH(endpoint, keyConfig(signers, hostKey), deadline)
+		if err == nil {
+			return c, nil
+		}
 		if errors.Is(err, errUntrustedHostKey) || !authRejected(err) {
 			return nil, err
 		}
 	}
-	return dialSSH(endpoint, anonConfig(hostKey))
+
+	c, err := dialSSH(endpoint, anonConfig(hostKey), deadline)
+	if err != nil && authRejected(err) {
+		return nil, fmt.Errorf("%w: %v", errAuthenticationRejected, err)
+	}
+	return c, err
 }
 
 // ed25519HostKeyAlgos pins host-key negotiation to ed25519: the only host-key type the
@@ -146,16 +259,34 @@ func anonConfig(hostKey ssh.HostKeyCallback) *ssh.ClientConfig {
 	}
 }
 
-// dialSSH establishes one SSH connection with the given config and opens SFTP over it.
-func dialSSH(endpoint string, sshCfg *ssh.ClientConfig) (*Client, error) {
-	conn, err := ssh.Dial("tcp", endpoint, sshCfg)
+// dialSSH establishes one SSH connection and opens SFTP before deadline. The network
+// deadline is cleared only after the complete endpoint attempt succeeds.
+func dialSSH(endpoint string, sshCfg *ssh.ClientConfig, deadline time.Time) (*Client, error) {
+	dialer := net.Dialer{Deadline: deadline}
+	netConn, err := dialer.Dial("tcp", endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to %s: %w", endpoint, err)
+		return nil, fmt.Errorf("TCP dial: %w", err)
 	}
+	if err := netConn.SetDeadline(deadline); err != nil {
+		netConn.Close()
+		return nil, fmt.Errorf("setting connection deadline: %w", err)
+	}
+
+	sshConn, chans, reqs, err := ssh.NewClientConn(netConn, endpoint, sshCfg)
+	if err != nil {
+		netConn.Close()
+		return nil, fmt.Errorf("SSH handshake: %w", err)
+	}
+	conn := ssh.NewClient(sshConn, chans, reqs)
 	sc, err := sftp.NewClient(conn)
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("starting SFTP: %w", err)
+	}
+	if err := netConn.SetDeadline(time.Time{}); err != nil {
+		sc.Close()
+		conn.Close()
+		return nil, fmt.Errorf("clearing connection deadline: %w", err)
 	}
 	return &Client{endpoint: endpoint, ssh: conn, sftp: sc}, nil
 }

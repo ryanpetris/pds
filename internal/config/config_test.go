@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestMergeMap(t *testing.T) {
@@ -29,6 +30,82 @@ func TestMergeMap(t *testing.T) {
 	nested := dst["nested"].(map[string]any)
 	if nested["keep"] != 1 || nested["over"] != "new" || nested["add"] != 2 {
 		t.Errorf("nested merge failed: %v", nested)
+	}
+}
+
+func TestMergeConfigMapClientEndpointsReplace(t *testing.T) {
+	dst := map[string]any{
+		"endpoints":   []any{map[string]any{"host": "old", "sshPort": 22}},
+		"trustedKeys": []any{"old-key"},
+	}
+	src := map[string]any{
+		"endpoints":   []any{map[string]any{"host": "new", "sshPort": 2222}},
+		"trustedKeys": []any{"new-key"},
+	}
+	mergeConfigMap(dst, src, RoleClient)
+
+	endpoints := dst["endpoints"].([]any)
+	if len(endpoints) != 1 || endpoints[0].(map[string]any)["host"] != "new" {
+		t.Errorf("client endpoints should be replaced, got %v", endpoints)
+	}
+	keys := dst["trustedKeys"].([]any)
+	if len(keys) != 2 {
+		t.Errorf("other client lists should still be unioned, got %v", keys)
+	}
+}
+
+func TestMergeConfigMapServerEndpointsStillUnion(t *testing.T) {
+	dst := map[string]any{"endpoints": []any{"a"}}
+	src := map[string]any{"endpoints": []any{"b"}}
+	mergeConfigMap(dst, src, RoleServer)
+
+	endpoints := dst["endpoints"].([]any)
+	if len(endpoints) != 2 {
+		t.Errorf("server lists should retain generic union behavior, got %v", endpoints)
+	}
+}
+
+func TestClientEndpointsReplaceAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "base.yaml")
+	override := filepath.Join(dir, "override.yaml")
+	if err := os.WriteFile(base, []byte(`
+endpoints:
+  - host: primary.example
+    sshPort: 22
+  - host: secondary.example
+    sshPort: 22
+trustedKeys: [base-key]
+identities: [base-identity]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(override, []byte(`
+endpoints:
+  - host: override.example
+    sshPort: 2222
+trustedKeys: [override-key]
+identities: [override-identity]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	merged := map[string]any{}
+	if err := mergeFile(merged, base, RoleClient); err != nil {
+		t.Fatal(err)
+	}
+	if err := mergeFile(merged, override, RoleClient); err != nil {
+		t.Fatal(err)
+	}
+	var client Client
+	if err := decode(merged, &client); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.Endpoints) != 1 || client.Endpoints[0].Host != "override.example" {
+		t.Errorf("endpoints were not replaced by the later file: %+v", client.Endpoints)
+	}
+	if len(client.TrustedKeys) != 2 || len(client.Identities) != 2 {
+		t.Errorf("non-endpoint lists should be unioned: trusted=%v identities=%v", client.TrustedKeys, client.Identities)
 	}
 }
 
@@ -189,19 +266,129 @@ func TestValidateClientRequired(t *testing.T) {
 	if err := (&Client{}).Validate(); err == nil {
 		t.Fatalf("empty client config must fail")
 	}
-	if err := (&Client{Host: "h", TrustedKeys: []string{"k"}}).Validate(); err == nil {
+	if err := (&Client{Endpoints: []ClientEndpoint{{Host: "h"}}, TrustedKeys: []string{"k"}}).Validate(); err == nil {
 		t.Fatalf("client config without sshPort must fail")
 	}
-	if err := (&Client{Host: "h", SSHPort: 22}).Validate(); err == nil {
+	if err := (&Client{Endpoints: []ClientEndpoint{{Host: "h", SSHPort: 22}}}).Validate(); err == nil {
 		t.Fatalf("client config without trustedKeys must fail")
 	}
-	c := &Client{Host: "h", SSHPort: 22, TrustedKeys: []string{"k"}}
+	c := &Client{Endpoints: []ClientEndpoint{{Host: "h", SSHPort: 22}}, TrustedKeys: []string{"k"}}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid client config failed: %v", err)
 	}
-	c.HTTPPort = 8080
+	c.Endpoints[0].HTTPPort = 8080
 	if err := c.Validate(); err != nil {
 		t.Fatalf("client config with httpPort failed: %v", err)
+	}
+}
+
+func TestValidateClientEndpoints(t *testing.T) {
+	valid := func(endpoints ...ClientEndpoint) *Client {
+		return &Client{Endpoints: endpoints, TrustedKeys: []string{"k"}}
+	}
+	tests := []struct {
+		name string
+		cfg  *Client
+	}{
+		{"blank host", valid(ClientEndpoint{Host: " \t", SSHPort: 22})},
+		{"zero ssh port", valid(ClientEndpoint{Host: "h", SSHPort: 0})},
+		{"negative ssh port", valid(ClientEndpoint{Host: "h", SSHPort: -1})},
+		{"large ssh port", valid(ClientEndpoint{Host: "h", SSHPort: 65536})},
+		{"negative http port", valid(ClientEndpoint{Host: "h", SSHPort: 22, HTTPPort: -1})},
+		{"large http port", valid(ClientEndpoint{Host: "h", SSHPort: 22, HTTPPort: 65536})},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.cfg.Validate(); err == nil {
+				t.Fatalf("invalid client config passed validation: %+v", test.cfg)
+			}
+		})
+	}
+
+	if err := valid(
+		ClientEndpoint{Host: "one.example", SSHPort: 22},
+		ClientEndpoint{Host: "two.example", SSHPort: 2222, HTTPPort: 8080},
+	).Validate(); err != nil {
+		t.Fatalf("multiple valid endpoints failed validation: %v", err)
+	}
+}
+
+func TestValidateClientRejectsDuplicateNormalizedEndpoints(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+	}{
+		{"exact", "host.example", "host.example"},
+		{"dns case and whitespace", "HOST.Example", " host.example "},
+		{"IPv6 brackets and spelling", "[0:0:0:0:0:0:0:1]", "::1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &Client{
+				Endpoints: []ClientEndpoint{
+					{Host: test.a, SSHPort: 22},
+					{Host: test.b, SSHPort: 22, HTTPPort: 8080},
+				},
+				TrustedKeys: []string{"k"},
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("duplicate endpoints %q and %q passed validation", test.a, test.b)
+			}
+		})
+	}
+
+	cfg := &Client{
+		Endpoints: []ClientEndpoint{
+			{Host: "host.example", SSHPort: 22},
+			{Host: "host.example", SSHPort: 2222},
+		},
+		TrustedKeys: []string{"k"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("same host on different SSH ports should be allowed: %v", err)
+	}
+}
+
+func TestClientDialTimeout(t *testing.T) {
+	if got := (&Client{}).EffectiveDialTimeout(); got != DefaultDialTimeout {
+		t.Fatalf("omitted dialTimeout = %v, want %v", got, DefaultDialTimeout)
+	}
+
+	var decoded Client
+	if err := decode(map[string]any{"dialTimeout": "10s"}, &decoded); err != nil {
+		t.Fatalf("decode duration string: %v", err)
+	}
+	if decoded.DialTimeout == nil || *decoded.DialTimeout != 10*time.Second {
+		t.Fatalf("decoded dialTimeout = %v, want 10s", decoded.DialTimeout)
+	}
+	if got := decoded.EffectiveDialTimeout(); got != 10*time.Second {
+		t.Fatalf("EffectiveDialTimeout = %v, want 10s", got)
+	}
+
+	if err := decode(map[string]any{"dialTimeout": "soon"}, &decoded); err == nil {
+		t.Fatalf("malformed dialTimeout should fail decoding")
+	}
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		cfg := &Client{
+			Endpoints:   []ClientEndpoint{{Host: "h", SSHPort: 22}},
+			DialTimeout: &timeout,
+			TrustedKeys: []string{"k"},
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("explicit dialTimeout %v should fail validation", timeout)
+		}
+	}
+}
+
+func TestClientLegacyAddressFieldsAreRejected(t *testing.T) {
+	var client Client
+	if err := decode(map[string]any{
+		"host":     "legacy.example",
+		"sshPort":  22,
+		"httpPort": 8080,
+	}, &client); err == nil {
+		t.Fatalf("legacy top-level client address fields should be unknown")
 	}
 }
 
@@ -213,7 +400,7 @@ func TestLoadClientUnvalidatedSkipsRequirements(t *testing.T) {
 		t.Fatal(err)
 	}
 	// An endpoint-only config: no sshPort, no trustedKeys.
-	body := "host: mirror.example.com\nhttpPort: 8080\n"
+	body := "endpoints:\n  - host: mirror.example.com\n    httpPort: 8080\n"
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -227,8 +414,11 @@ func TestLoadClientUnvalidatedSkipsRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadClientUnvalidated: %v", err)
 	}
-	if c.Host != "mirror.example.com" || c.HTTPPort != 8080 {
+	if len(c.Endpoints) != 1 || c.Endpoints[0].Host != "mirror.example.com" || c.Endpoints[0].HTTPPort != 8080 {
 		t.Errorf("decoded = %+v", c)
+	}
+	if got := c.EffectiveDialTimeout(); got != 10*time.Second {
+		t.Errorf("default dial timeout = %v, want 10s", got)
 	}
 }
 

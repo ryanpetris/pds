@@ -5,14 +5,20 @@
 #   ~/.config/pds/client/config.yaml        (per-user, highest precedence)
 # Drop-ins in the sibling config.d/ directory override the base file.
 
-# Server address. host may be a name, IPv4, or IPv6 literal (e.g. ::1). The SSH
-# endpoint is host:sshPort; PDS_ENDPOINT overrides it at runtime.
-host: pds.example.com
-sshPort: 2222
+# Server endpoints are tried in order until SSH authentication and SFTP setup
+# complete. host may be a name, IPv4, or IPv6 literal (e.g. ::1). httpPort is
+# optional and is only used by `pds endpoint --http`.
+endpoints:
+  - host: pds-a.example.com
+    sshPort: 2222
+    # httpPort: 8080
+  - host: pds-b.example.com
+    sshPort: 2202
+    # httpPort: 8081
 
-# Optional. Only used by `pds endpoint --http` to print the read-only HTTP URL
-# (http://host:httpPort). Must match the server's httpListen port.
-# httpPort: 8080
+# Optional total setup budget for each endpoint (default: 10s). This covers
+# DNS, TCP, the SSH handshake/authentication, and SFTP startup.
+# dialTimeout: 10s
 
 # Pinned server host keys. Any match is accepted, so list every node in a
 # cluster (each with its own locally generated key) and keep old keys here
@@ -26,5 +32,9 @@ trustedKeys:
 #   - ~/.ssh/id_ed25519
 
 # If no key authenticates (none configured, or the server rejects it) and the server
-# has allowAnonymous: true, pds automatically retries read-only as the "anonymous"
-# user. A host-key mismatch or network failure never triggers this fallback.
+# has allowAnonymous: true, pds retries read-only as the "anonymous" user on that
+# same endpoint. Availability failures try the next endpoint without downgrading.
+# An untrusted host key or exhausted authentication rejection aborts immediately.
+# PDS_ENDPOINT=host:port is a singular hard override that disables this list.
+# Failover only establishes the initial session; commands are not replayed after
+# a connected endpoint fails.

@@ -6,7 +6,7 @@
 //	pds [--config FILE] push  <bucket> [FILE|-]  # default: stdin
 //	pds [--config FILE] meta  <bucket>
 //	pds [--config FILE] exec  <name> [args...]
-//	pds [--config FILE] endpoint [--ssh|--http]  # print <host>:<port> (or http URL)
+//	pds [--config FILE] endpoint [--ssh|--http]  # print configured SSH endpoints (or HTTP URLs)
 package main
 
 import (

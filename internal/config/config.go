@@ -17,11 +17,13 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -52,14 +54,34 @@ const (
 // key auth and keep their host identity.
 const AnonymousUser = "anonymous"
 
-// Client is the pds configuration. The server is addressed by separate host and port
-// fields; httpPort is optional and only used to build read URLs (pds endpoint --http).
+// DefaultDialTimeout is the maximum time a client waits for one endpoint to become
+// usable when dialTimeout is omitted.
+const DefaultDialTimeout = 10 * time.Second
+
+// ClientEndpoint is one server candidate. Candidates are tried in order. HTTPPort is
+// optional and is only used to build read URLs (pds endpoint --http).
+type ClientEndpoint struct {
+	Host     string `yaml:"host"`
+	SSHPort  int    `yaml:"sshPort"`
+	HTTPPort int    `yaml:"httpPort"`
+}
+
+// Client is the pds configuration. Endpoints are ordered from most to least
+// preferred. A nil DialTimeout means DefaultDialTimeout.
 type Client struct {
-	Host        string   `yaml:"host"`
-	SSHPort     int      `yaml:"sshPort"`
-	HTTPPort    int      `yaml:"httpPort"`
-	TrustedKeys []string `yaml:"trustedKeys"`
-	Identities  []string `yaml:"identities"`
+	Endpoints   []ClientEndpoint `yaml:"endpoints"`
+	DialTimeout *time.Duration   `yaml:"dialTimeout"`
+	TrustedKeys []string         `yaml:"trustedKeys"`
+	Identities  []string         `yaml:"identities"`
+}
+
+// EffectiveDialTimeout returns the configured per-endpoint timeout, or the default
+// when no timeout was configured. Validation rejects explicit non-positive values.
+func (c *Client) EffectiveDialTimeout() time.Duration {
+	if c == nil || c.DialTimeout == nil {
+		return DefaultDialTimeout
+	}
+	return *c.DialTimeout
 }
 
 // Server is the pdsd configuration.
@@ -212,19 +234,49 @@ func LoadServer(override string) (*Server, error) {
 
 // Validate checks that the client config has everything required from somewhere.
 func (c *Client) Validate() error {
-	if c.Host == "" {
-		return fmt.Errorf("config: host is required")
+	if len(c.Endpoints) == 0 {
+		return fmt.Errorf("config: at least one endpoints entry is required")
 	}
-	if c.SSHPort <= 0 || c.SSHPort > 65535 {
-		return fmt.Errorf("config: sshPort must be between 1 and 65535")
+	seen := make(map[string]int, len(c.Endpoints))
+	for i, endpoint := range c.Endpoints {
+		if strings.TrimSpace(endpoint.Host) == "" {
+			return fmt.Errorf("config: endpoints[%d] has no host", i)
+		}
+		if endpoint.SSHPort <= 0 || endpoint.SSHPort > 65535 {
+			return fmt.Errorf("config: endpoints[%d] sshPort must be between 1 and 65535", i)
+		}
+		if endpoint.HTTPPort < 0 || endpoint.HTTPPort > 65535 {
+			return fmt.Errorf("config: endpoints[%d] httpPort must be 0 or between 1 and 65535", i)
+		}
+		key := normalizedClientSSHEndpoint(endpoint)
+		if previous, ok := seen[key]; ok {
+			return fmt.Errorf("config: endpoints[%d] duplicates endpoints[%d] SSH endpoint %q", i, previous, key)
+		}
+		seen[key] = i
 	}
-	if c.HTTPPort < 0 || c.HTTPPort > 65535 {
-		return fmt.Errorf("config: httpPort must be between 1 and 65535")
+	if c.DialTimeout != nil && *c.DialTimeout <= 0 {
+		return fmt.Errorf("config: dialTimeout must be positive")
 	}
 	if len(c.TrustedKeys) == 0 {
 		return fmt.Errorf("config: at least one trustedKeys entry is required")
 	}
 	return nil
+}
+
+// normalizedClientSSHEndpoint returns a comparison key for duplicate detection.
+// DNS names are case-insensitive, bracketed and unbracketed IP literals are
+// equivalent, and IP literals are reduced to their canonical spelling.
+func normalizedClientSSHEndpoint(endpoint ClientEndpoint) string {
+	host := strings.TrimSpace(endpoint.Host)
+	if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
+		host = host[1 : len(host)-1]
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		host = addr.String()
+	} else {
+		host = strings.ToLower(host)
+	}
+	return net.JoinHostPort(host, fmt.Sprint(endpoint.SSHPort))
 }
 
 // Validate checks that the server config is internally consistent.
@@ -321,13 +373,13 @@ func loadMerged(role Role, override string) (map[string]any, error) {
 	acc := map[string]any{}
 	for _, root := range tierRoots(role) {
 		for _, f := range layerFiles(root) {
-			if err := mergeFile(acc, f); err != nil {
+			if err := mergeFile(acc, f, role); err != nil {
 				return nil, err
 			}
 		}
 	}
 	if override != "" {
-		if err := mergeFile(acc, override); err != nil {
+		if err := mergeFile(acc, override, role); err != nil {
 			return nil, err
 		}
 	}
@@ -379,7 +431,7 @@ func fileExists(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
-func mergeFile(acc map[string]any, path string) error {
+func mergeFile(acc map[string]any, path string, role Role) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("config: reading %s: %w", path, err)
@@ -388,8 +440,19 @@ func mergeFile(acc map[string]any, path string) error {
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return fmt.Errorf("config: parsing %s: %w", path, err)
 	}
-	mergeMap(acc, m)
+	mergeConfigMap(acc, m, role)
 	return nil
+}
+
+// mergeConfigMap applies the generic merge rules, except that a client layer's
+// top-level endpoints list replaces the preceding list. Endpoint order expresses
+// failover priority, so unioning lists from separate layers would be surprising.
+func mergeConfigMap(dst, src map[string]any, role Role) {
+	endpoints, replaceEndpoints := src["endpoints"]
+	mergeMap(dst, src)
+	if role == RoleClient && replaceEndpoints {
+		dst["endpoints"] = endpoints
+	}
 }
 
 // mergeMap deep-merges src into dst: scalars override, maps recurse, lists are
