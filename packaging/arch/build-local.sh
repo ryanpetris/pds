@@ -37,11 +37,17 @@ fi
 export PDS_PKGVER="$pkgver"
 
 tarball="$here/pds-${pkgver}.tar.gz"
+tmpdir="$(mktemp -d /tmp/pds-package.XXXXXX)"
+tmp_tarball="$tmpdir/pds-${pkgver}.tar.gz"
+trap 'rm -rf -- "$tmpdir"' EXIT
 
 echo ">> packaging working tree as pds-${pkgver}.tar.gz"
 # Archive the working tree under a top-level pds-<ver>/ prefix, excluding the
-# VCS dir, build output, and local/release artifacts.
-tar --create --gzip --file "$tarball" \
+# VCS dir, build output, and local/release artifacts. Write outside the tree:
+# creating the tarball under packaging/arch while archiving the repository would
+# change that directory's metadata and make tar exit with "file changed as we
+# read it". Move the completed archive into place afterward for makepkg.
+tar --create --gzip --file "$tmp_tarball" \
 	--directory "$repo_root" \
 	--transform "s,^[.],pds-${pkgver}," \
 	--exclude='./.git' \
@@ -54,6 +60,9 @@ tar --create --gzip --file "$tarball" \
 	--exclude='./.toby.yaml' \
 	--exclude='*.out' --exclude='coverage.*' \
 	.
+mv -- "$tmp_tarball" "$tarball"
+rmdir -- "$tmpdir"
+trap - EXIT
 
 echo ">> running makepkg (PDS_PKGVER=${pkgver})"
 cd "$here"
