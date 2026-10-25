@@ -1,79 +1,83 @@
-# Arch packaging (local testing)
+# Arch packaging
 
-A `PKGBUILD` plus a wrapper script for building a PDS `pacman` package from the
-**current working tree** — intended for local testing, not distribution.
+Build a local PDS package from the current working tree, including uncommitted
+changes. The source tarball uses `sha256sums=('SKIP')` because each build creates
+it again. This recipe is not ready for the AUR without a fixed source and checksum.
 
-## Build
+## Build with Docker
 
-### In Docker (no host build deps)
-
-```sh
-make arch-pkg       # from the repo root
-```
-
-Builds the package inside a clean `archlinux:base-devel` container — the host
-needs nothing but Docker — and copies the resulting
-`pds-<ver>-1-x86_64.pkg.tar.zst` to the repo root. The image
-(`packaging/arch/Dockerfile`) initialises the pacman keyring, does a full
-`pacman -Syu` while installing only the extra makedepends (`go`, `git`), then
-runs `build-local.sh` (below) as an unprivileged user.
-
-### On the host
+Run from the repository root:
 
 ```sh
-./build-local.sh        # produces pds-<ver>-1-x86_64.pkg.tar.zst
-./build-local.sh -i     # build and install via pacman
+make arch-pkg
 ```
 
-`build-local.sh` tars the working tree (including uncommitted changes) into
-`pds-<ver>.tar.gz`, where `<ver>` is derived from git (most recent `v*` tag, e.g.
-`v0.1.1` → `0.1.1`, or `0.1.1.r<n>.g<shorthash>` past it; `0.0.0.r<count>.g<hash>`
-with no tag), then runs `makepkg`. Extra args pass straight through. Requires
-`go` and `base-devel` on the host.
+Only Docker is required on the host. The `archlinux:base-devel` image installs
+`rust` and `git`, then runs `makepkg` as an unprivileged user. The finished
+`pds-<ver>-1-x86_64.pkg.tar.zst` is copied to the repository root.
+
+## Build on Arch Linux
+
+Install `rust`, `git`, and `base-devel`, then run from the repository root:
+
+```sh
+packaging/arch/build-local.sh
+```
+
+The wrapper creates `packaging/arch/pds-<ver>.tar.gz` and runs `makepkg` there.
+Extra arguments pass through to `makepkg`, including `-i` to install the package.
+The package depends on `glibc` and `gcc-libs` at runtime.
+
+The version comes from the most recent `v*` Git tag. An exact `v0.1.1` tag becomes
+`0.1.1`; later commits become `0.1.1.r<count>.g<hash>`. Without a tag, the version
+is `0.0.0.r<count>.g<hash>`. Outside a checkout, it uses a date stamp.
+`build-local.sh` exports `PDS_PKGVER`; invoking `makepkg` directly defaults to
+`0.0.0`.
+
+`make build` uses `cargo build --locked --release --bins` and copies both binaries
+to `bin/`. The release profile strips symbols. The package remaps source paths
+and generates Bash and Zsh completions from the built client.
 
 ## Package contents
 
-| Path | Source |
-| --- | --- |
-| `/usr/bin/pds`, `/usr/bin/pdsd` | `make build` output |
-| `/usr/share/bash-completion/completions/pds` | `pds completion bash` |
-| `/usr/share/zsh/site-functions/_pds` | `pds completion zsh` |
-| `/usr/lib/systemd/system/pds@.service` | `packaging/systemd/pds@.service` |
-| `/usr/lib/systemd/user/pds.service` | `packaging/systemd/pds.service` |
-| `/usr/share/pds/config.server.example.yaml` | `examples/server/config.yaml` |
-| `/usr/share/pds/config.client.example.yaml` | `examples/client/config.yaml` |
-| `/usr/share/doc/pds/README.md` | `README.md` |
-| `/usr/share/licenses/pds/LICENSE` | `LICENSE` |
+- `/usr/bin/pds` and `/usr/bin/pdsd`
+- `/usr/share/bash-completion/completions/pds`
+- `/usr/share/zsh/site-functions/_pds`
+- `/usr/lib/systemd/system/pds@.service`
+- `/usr/lib/systemd/user/pds.service`
+- `/usr/share/pds/config.server.example.yaml`
+- `/usr/share/pds/config.client.example.yaml`
+- `/usr/share/doc/pds/README.md`
+- `/usr/share/licenses/pds/LICENSE`
 
-## Running pdsd
+## Run the server
 
-`pdsd` runs as a normal user (never root): its SSH host keys are that user's
-`~/.ssh/id_*`, and config is read from the layered tiers
-(`/usr/lib/pds/server`, `/etc/pds/server`, `~/.config/pds/server`).
+`pdsd` runs as a normal user. It reads host keys from `~/.ssh/id_*` and merges
+configuration from `/usr/lib/pds/server`, `/etc/pds/server`, and
+`~/.config/pds/server`.
 
-- **System-wide, instanced by user** — `pds@<user>.service`:
+To prepare the current user's configuration:
 
-  ```sh
-  cp /usr/share/pds/config.server.example.yaml /home/petris/.config/pds/server/config.yaml
-  # edit it; ensure /home/petris/.ssh holds an id_* host key
-  sudo systemctl enable --now pds@petris
-  ```
+```sh
+mkdir -p ~/.config/pds/server
+cp /usr/share/pds/config.server.example.yaml ~/.config/pds/server/config.yaml
+```
 
-  `User=%i` runs the daemon as that user. `ProtectSystem=full` keeps `/usr` and
-  `/etc` read-only, so put writable bucket paths under `/srv`, `/var`, or the
-  user's home. For a privileged listen port (<1024) add
-  `AmbientCapabilities=CAP_NET_BIND_SERVICE` via a drop-in.
+Edit the configuration and ensure `~/.ssh` contains a host key. Start the user
+service with:
 
-- **Per-user session** — `systemctl --user`:
+```sh
+systemctl --user enable --now pds
+```
 
-  ```sh
-  systemctl --user enable --now pds
-  ```
+For a system service, prepare that account's configuration and host key, then
+use its account name as the instance, for example:
 
-## Notes
+```sh
+sudo systemctl enable --now pds@pdsuser
+```
 
-- **Integrity is intentionally skipped** (`sha256sums=('SKIP')`): the source
-  tarball is regenerated on every run, so a pinned checksum would only get in the
-  way. This is why the recipe is *not* suitable for the AUR as-is.
-- The version is injected via the `PDS_PKGVER` environment variable the script
-  exports; running `makepkg` directly without it falls back to `0.0.0`.
+The system unit uses `ProtectSystem=full`, so put writable bucket paths under
+`/srv`, `/var`, or the account's home. For a listen port below 1024, add
+`AmbientCapabilities=CAP_NET_BIND_SERVICE` and
+`CapabilityBoundingSet=CAP_NET_BIND_SERVICE` in a systemd drop-in.

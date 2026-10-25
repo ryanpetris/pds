@@ -18,20 +18,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
+      - name: Setup Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component llvm-tools-preview \
+            --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl
+          rustup default stable
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang build-essential binutils bash tar gzip coreutils
+          cargo install --locked cargo-llvm-cov --version 0.9.1
 
       - name: Test with coverage
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          go test -covermode=atomic -coverprofile=dist/coverage.out ./...
-          go tool cover -func=dist/coverage.out | tee dist/coverage.txt
-          go tool cover -html=dist/coverage.out -o dist/coverage.html
+          cargo llvm-cov --locked | tee dist/coverage.txt
+          cargo llvm-cov report --html --output-dir dist/coverage
+          cargo llvm-cov report --lcov --output-path dist/coverage.lcov
+          tar -C dist/coverage -czf dist/coverage-html.tar.gz .
           {
             printf '## Test Coverage\n\n'
             printf '```\n'
@@ -44,9 +51,10 @@ jobs:
         with:
           name: coverage
           path: |
-            dist/coverage.out
             dist/coverage.txt
-            dist/coverage.html
+            dist/coverage.lcov
+            dist/coverage-html.tar.gz
+            dist/coverage/
 
       - name: Derive version
         id: version
@@ -69,19 +77,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/linux-x86_64 dist/linux-arm64
-          # Pure-Go, CGO-free static binaries.
-          ldflags="-s -w -extldflags=-static"
-
-          for cmd in pds pdsd; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$ldflags" \
-              -o "dist/linux-x86_64/$cmd" "./cmd/$cmd"
-            CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$ldflags" \
-              -o "dist/linux-arm64/$cmd" "./cmd/$cmd"
-          done
-
-          tar -C dist/linux-x86_64 -czf dist/pds-linux-x86_64.tar.gz pds pdsd
-          tar -C dist/linux-arm64 -czf dist/pds-linux-arm64.tar.gz pds pdsd
+          scripts/build-release.sh
 
       - name: Build Arch package (amd64)
         shell: bash
@@ -112,9 +108,9 @@ jobs:
             dist/pds-linux-x86_64.tar.gz
             dist/pds-linux-arm64.tar.gz
             pds-*-x86_64.pkg.tar.zst
-            dist/coverage.out
             dist/coverage.txt
-            dist/coverage.html
+            dist/coverage.lcov
+            dist/coverage-html.tar.gz
           )
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --clobber

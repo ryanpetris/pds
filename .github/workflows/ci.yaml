@@ -9,71 +9,49 @@ permissions:
   contents: read
 
 jobs:
+  minimum-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check minimum Rust version
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal
+          cargo +1.89.0 check --locked --all-targets
+
   build-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
+      - name: Setup Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
 
-      - name: gofmt
-        shell: bash
-        run: |
-          set -euo pipefail
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "These files are not gofmt-clean:"
-            echo "$unformatted"
-            exit 1
-          fi
+      - name: Format
+        run: cargo +stable fmt --all -- --check
 
-      - name: Build
-        run: CGO_ENABLED=0 go build ./...
-
-      - name: Vet
-        run: go vet ./...
+      - name: Clippy
+        run: cargo +stable clippy --locked --all-targets -- -D warnings
 
       - name: Test
-        run: go test ./...
+        run: make test CARGO='cargo +stable'
 
-      - name: Race
-        run: CGO_ENABLED=1 go test -race ./...
+      - name: Binary compatibility
+        run: make compat CARGO='cargo +stable'
 
-  govulncheck:
+  dependencies:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
+      - name: Setup Rust
+        run: rustup toolchain install stable --profile minimal
 
-      - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Install cargo-deny
+        run: cargo +stable install --locked cargo-deny --version 0.20.2
 
-  licenses:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      # Fail the build if any dependency carries a license outside the permissive
-      # allowlist.
-      - name: go-licenses check
-        run: |
-          go run github.com/google/go-licenses@latest check ./... \
-            --allowed_licenses=MIT,BSD-3-Clause,BSD-2-Clause,Apache-2.0,ISC,MPL-2.0
+      - name: Advisories and licenses
+        run: make advisories licenses

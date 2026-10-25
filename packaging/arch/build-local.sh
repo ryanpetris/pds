@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build-local.sh — build a PDS Arch package from the current working tree.
+# Build a PDS Arch package from the current working tree.
 #
 # This is a local TESTING convenience: it tars the working tree (including any
 # uncommitted changes) into a source tarball that the PKGBUILD consumes with
@@ -51,8 +51,17 @@ tar --create --gzip --file "$tmp_tarball" \
 	--directory "$repo_root" \
 	--transform "s,^[.],pds-${pkgver}," \
 	--exclude='./.git' \
+	--exclude='./pds' \
+	--exclude='./pdsd' \
 	--exclude='./bin' \
+	--exclude='./target' \
 	--exclude='./dist' \
+	--exclude='./.tmp' \
+	--exclude='./tmp' \
+	--exclude='./*.pkg.tar.*' \
+	--exclude='./*.src.tar.*' \
+	--exclude='./pds-*.tar.gz' \
+	--exclude='__pycache__' \
 	--exclude='./packaging/arch/pkg' \
 	--exclude='./packaging/arch/src' \
 	--exclude='./packaging/arch/pds-*.tar.gz' \

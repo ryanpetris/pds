@@ -3,7 +3,7 @@
 # Builds pds-<ver>-1-x86_64.pkg.tar.zst inside a clean archlinux:base-devel
 # container, so the host needs nothing but Docker. base-devel already supplies
 # makepkg, fakeroot, and the build toolchain; we add only the package's extra
-# makedepends (go to compile, git for the version stamp). Driven by
+# makedepends (Rust to compile, git for the version stamp). Driven by
 # `make arch-pkg` at the repo root, which copies the finished package out.
 
 FROM docker.io/archlinux/archlinux:base-devel
@@ -14,7 +14,7 @@ FROM docker.io/archlinux/archlinux:base-devel
 # drop the package cache to keep the image lean.
 RUN pacman-key --init \
     && pacman-key --populate archlinux \
-    && pacman -Syu --noconfirm --needed go git \
+    && pacman -Syu --noconfirm --needed rust git \
     && pacman -Scc --noconfirm
 
 # makepkg refuses to run as root, so build under an unprivileged user that owns
@@ -27,13 +27,12 @@ RUN useradd -m -s /bin/bash build \
 USER build
 WORKDIR /home/build/pds
 
-# Bring in the working tree (including .git — build-local.sh derives the package
-# version from the git revision). .dockerignore keeps build output, local state,
-# and previous package artifacts out of the context.
+# Include .git so build-local.sh can derive the package version.
+# .dockerignore excludes build output, local state, and package artifacts.
 COPY --chown=build:build . .
 
 # Tar the working tree, stamp PDS_PKGVER from git, and run makepkg (integrity
-# checks skipped — the tarball is regenerated every build). Collect the finished
+# checks skipped because the tarball is regenerated every build). Collect the
 # package under a fixed path so `make arch-pkg` can copy it out by directory.
 RUN cd packaging/arch \
     && bash ./build-local.sh \

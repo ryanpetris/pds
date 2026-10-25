@@ -1,41 +1,51 @@
-# PDS build & quality targets. All builds are CGO-free (pure Go).
-export CGO_ENABLED := 0
+CARGO            ?= cargo
+CARGO_DENY       ?= cargo deny
+PYTHON           ?= python3
+CARGO_TARGET_DIR ?= target
+BINDIR           ?= bin
+export CARGO_TARGET_DIR
 
-GO     ?= go
-BINDIR ?= bin
-
-# Arch package build (Docker).
 DOCKER          ?= docker
 ARCH_IMAGE      ?= pds-arch-build
 ARCH_DOCKERFILE ?= packaging/arch/Dockerfile
 
-.PHONY: all build pds pdsd test vet fmt check arch-pkg clean
+.PHONY: all build pds pdsd test compat clippy vet fmt fmt-check check advisories licenses arch-pkg clean
 
 all: build
 
-build: pds pdsd
+build:
+	$(CARGO) build --locked --release --bins
+	mkdir -p $(BINDIR)
+	cp $(CARGO_TARGET_DIR)/release/pds $(CARGO_TARGET_DIR)/release/pdsd $(BINDIR)/
 
-pds:
-	$(GO) build -o $(BINDIR)/pds ./cmd/pds
-
-pdsd:
-	$(GO) build -o $(BINDIR)/pdsd ./cmd/pdsd
+pds pdsd: build
 
 test:
-	$(GO) test ./...
+	$(CARGO) test --locked
 
-vet:
-	$(GO) vet ./...
+compat: build
+	PDS_BIN="$(abspath $(BINDIR)/pds)" PDSD_BIN="$(abspath $(BINDIR)/pdsd)" $(PYTHON) tests/compat.py
+
+clippy:
+	$(CARGO) clippy --locked --all-targets -- -D warnings
+
+vet: clippy
 
 fmt:
-	$(GO) fmt ./...
+	$(CARGO) fmt --all
 
-# Full quality gate: vet and tests.
-check: vet test
+fmt-check:
+	$(CARGO) fmt --all -- --check
 
-# Build the Arch package in a clean archlinux:base-devel container (only Docker
-# is needed on the host) and copy the resulting pds-*.pkg.tar.zst to the repo
-# root. The build context is the repo root; see packaging/arch/Dockerfile.
+check: fmt-check clippy test compat advisories licenses
+
+advisories:
+	$(CARGO_DENY) --locked check advisories
+
+licenses:
+	$(CARGO_DENY) --locked check licenses
+
+# Build in Arch Linux and copy the package to the repository root.
 arch-pkg:
 	$(DOCKER) build -f $(ARCH_DOCKERFILE) -t $(ARCH_IMAGE) .
 	cid=$$($(DOCKER) create $(ARCH_IMAGE)) && \
@@ -43,4 +53,5 @@ arch-pkg:
 		$(DOCKER) cp $$cid:/home/build/out/. .
 
 clean:
+	$(CARGO) clean
 	rm -rf $(BINDIR)

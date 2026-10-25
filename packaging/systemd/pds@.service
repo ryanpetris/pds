@@ -1,6 +1,6 @@
 [Unit]
 # System-wide pds, instanced by the user it runs as: `pds@<user>.service`
-# (e.g. `systemctl enable --now pds@petris`). The instance name %i is the
+# (e.g. `systemctl enable --now pds@pdsuser`). The instance name %i is the
 # system user; systemd sets that user's $HOME, so pdsd reads its host keys from
 # ~%i/.ssh/id_* and its config from that user's tier (~%i/.config/pds/server,
 # plus /etc/pds/server and /usr/lib/pds/server).
@@ -33,7 +33,7 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictNamespaces=yes
-# Pure-Go, no cgo: W^X is safe.
+# The Rust daemon does not generate executable code at runtime.
 MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native

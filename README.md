@@ -1,16 +1,16 @@
-# PDS — Petris Distribution System
+# PDS: Petris Distribution System
 
 PDS distributes files (notably runnable scripts) and collects validated uploads from
-many hosts over SSH/SFTP. Authenticity comes from the **SSH transport** — clients pin
-the server's host key(s); the server authenticates clients by public key — so there
-is no PGP/GPG signing.
+many hosts over SSH/SFTP. Authenticity comes from the **SSH transport**. Clients pin
+the server's host keys; the server authenticates clients by public key. There is no
+PGP/GPG signing.
 
 Two binaries:
 
-- **`pdsd`** — the server daemon. Runs as a normal user (not root). Serves read-only
+- **`pdsd`** is the server daemon. Runs as a normal user. Serves read-only
   and read-write **buckets** and accepts validated **pushes**. Host keys are the
   user's `~/.ssh/id_*`.
-- **`pds`** — the client. Pulls files, lists buckets, pushes data, and runs scripts.
+- **`pds`** is the client. Pulls files, lists buckets, pushes data, and runs scripts.
 
 ## Concepts
 
@@ -20,26 +20,31 @@ A bucket is a named storage area mapped to a filesystem path (a leading `~` expa
 to the home of the user `pdsd` runs as). `mode: ro` (default) is read-only;
 `mode: rw` also accepts pushes. Writable buckets have two independent flags:
 
-- **`versioned`** — every push is stored as `yyyyMMddHHmmss.<ext>` and `latest.<ext>`
-  is repointed at it. **Nothing is ever pruned.** Non-versioned buckets overwrite a
+- **`versioned`** stores every push as `yyyyMMddHHmmss.<ext>` and repoints
+  `latest.<ext>` at it. **Nothing is ever pruned.** Non-versioned buckets overwrite a
   single `latest.<ext>`.
-- **`byHost`** — data is filed under the connecting host's subdirectory
-  (`<path>/<host>/…`).
+- **`byHost`** files data under the connecting host's subdirectory,
+  `<path>/<host>/...`.
 
 Writable buckets require an `extension` and a `validator` (`yaml` | `json` | `jsonl` |
 `none`),
 which runs server-side before the data is committed.
 
+New storage files use `0666` and directories use `0777`, filtered through the
+daemon's umask.
+
 ### Paths
 
-There is one virtual filesystem and **the first path segment is the bucket** — there
-is no `--bucket` flag:
+There is one virtual filesystem and **the first path segment is the bucket**.
+There is no `--bucket` flag:
 
 ```
 pds pull metrics/.self/latest.yaml
 pds ls   scripts
 pds push metrics data.yaml
 ```
+
+Bucket names, host names, and remote file names must be UTF-8.
 
 Reserved virtual names:
 
@@ -63,7 +68,7 @@ validator: yaml     # rw buckets only
 ### Host identity
 
 Each authorized client public key maps to a **host name** in the server config. On a
-`byHost` bucket the server files a push under that host automatically — a host cannot
+`byHost` bucket the server files a push under that host automatically. A host cannot
 push anywhere else. Reads are open: any authorized client may read any path.
 
 ### Anonymous (read-only) access
@@ -71,7 +76,7 @@ push anywhere else. Reads are open: any authorized client may read any path.
 Setting `allowAnonymous: true` on the server lets clients connect **without a key**.
 Anonymous clients are strictly read-only: they may read any bucket but cannot push and
 have no `.self` host directory. They connect as the reserved SSH user `anonymous`.
-Authenticated clients are unaffected — they keep using their key and host identity. With
+Authenticated clients keep using their key and host identity. With
 `allowAnonymous` set, `authorizedKeys` becomes optional (a server can be
 anonymous-read-only only).
 
@@ -84,7 +89,7 @@ a host-key mismatch (possible MITM) aborts the entire sequence.
 ### HTTP read access
 
 Setting `httpListen` on the server starts a second listener (its own port; SSH is
-untouched) that serves the same buckets **read-only over plain HTTP** — `GET`/`HEAD`
+untouched) that serves the same buckets **read-only over plain HTTP**, with `GET`/`HEAD`
 only, no pushes, no `.self`. Directories return a JSON listing; files stream with `Range`
 support; `<bucket>/.meta` returns the bucket's metadata. This is the anonymous tier over a
 different transport, so `httpListen` **requires `allowAnonymous: true`** (otherwise `pdsd`
@@ -96,9 +101,9 @@ curl http://pds.example.com:8080/scripts              # JSON directory listing
 ```
 
 **Security:** HTTP has no host-key pinning and no client authentication, so enabling it
-makes every bucket's contents publicly readable by anyone who can reach the port — a
-deliberate, opt-in downgrade of the read-side guarantees. Writes and host identity remain
-SSH-only. For authenticated/encrypted HTTP, front it with a reverse proxy (TLS is out of
+makes every bucket's contents publicly readable by anyone who can reach the port.
+This is a deliberate, opt-in downgrade of the read-side guarantees. Writes and host
+identity remain SSH-only. For authenticated/encrypted HTTP, front it with a reverse proxy (TLS is out of
 scope). `pds endpoint --http` prints each configured `http://host:httpPort` URL in
 endpoint order.
 
@@ -122,7 +127,7 @@ exception: a higher layer replaces it so that layer can choose a new primary. An
 
 On-disk keys are camelCase.
 
-### `pds` (client) — `pds/client/config.yaml`
+### `pds` client: `pds/client/config.yaml`
 
 ```yaml
 endpoints:                       # attempted from first to last
@@ -153,15 +158,15 @@ trusted for every endpoint. Replacing `endpoints` in a higher layer does not rev
 from a lower layer; remove a retired or compromised key from the layer that introduced it.
 
 Failover applies only while establishing the session. Once connected, an operation error
-is returned to the caller; operations—especially `push`—are never replayed on another
+is returned to the caller. Operations, especially `push`, are never replayed on another
 node after an ambiguous disconnect.
 
-### `pdsd` (server) — `pds/server/config.yaml`
+### `pdsd` server: `pds/server/config.yaml`
 
 ```yaml
 sshListen: ":2222"               # ":port" (all), an IP literal, a hostname, or "iface:<name>:port"
 httpListen: ":8080"              # optional; read-only HTTP on its own port (requires allowAnonymous)
-execBucket: scripts              # optional; exposed as .pds/exec — MUST be a mode:ro bucket
+execBucket: scripts              # optional; exposed as .pds/exec; must be a mode:ro bucket
 allowAnonymous: false            # optional; allow keyless read-only clients (user "anonymous")
 authorizedKeys:               # client public key -> host name
   - host: web01
@@ -188,8 +193,8 @@ or `"iface:<name>:<port>"` to track a network interface. The first three are
 bound once and pdsd exits if the bind fails. The `iface:` form binds the named
 interface's current addresses and keeps them in sync as addresses come and go
 (e.g. a VPN like `tailscale0` coming up); link-local addresses are skipped. If the
-interface has no usable address — missing, down, or not yet assigned at startup —
-pdsd waits up to 60 seconds for one to appear, then exits. The explicit `iface:`
+interface has no usable address because it is missing, down, or not yet assigned at
+startup, pdsd waits up to 60 seconds for one to appear, then exits. The explicit `iface:`
 marker is required because an interface name can also be a valid hostname.
 Tracking interface addresses requires the systemd unit to allow `AF_NETLINK` (the
 shipped `packaging/systemd/pds@.service` already does).
@@ -208,16 +213,21 @@ pds [--config FILE] exec <name> [args...]
 pds [--config FILE] endpoint [--ssh|--http]  # print ordered SSH endpoints or configured HTTP URLs
 ```
 
-Flags are GNU-style: `--config` (or `-c`) and `-o`/`--output` for `pull`. A global
-flag must come before the subcommand (e.g. `pds --config c.yaml ls`); everything
-after `exec <name>` is passed to the script untouched.
+Options use conventional `--long` and `-x` forms. `pds` accepts `--config` or `-c`
+before or after the subcommand, such as `pds ls -c c.yaml` or
+`pds exec -c c.yaml collect`. Everything after the `exec` script name is passed to
+the script untouched, including `--config`, `-h`, and `--`. Use `pds help exec` for
+help with that command.
+
+For `pull`, `-o` or `--output` selects a local file. `pds push bucket -` reads stdin;
+`pds pull path -o -` writes a file named `-`. Use `--` to end option parsing before
+positional arguments, such as `pds push -- bucket -upload`.
 
 `pds exec <name> [args...]` pulls `<name>` from the exec bucket, writes it to a temp
 file with the execute bit set, and runs it with `argv[0]` = `<name>` and the given
 arguments. `PDS_ENDPOINT` is exported with the endpoint that supplied the script so it
 can re-invoke `pds` against the same node. This intentionally pins nested commands rather
-than re-running configured failover. The file is assumed executable — there are no extra
-checks.
+than re-running configured failover. The file is assumed executable, with no extra checks.
 
 Example script-driven workflow:
 
@@ -231,10 +241,10 @@ pds push metrics /tmp/m.yaml
 
 ### Shell completion
 
-`pds` generates bash/zsh completion scripts and completes commands with **live
-data** from the server — bucket names, paths (descending as you type), and `exec`
-script names are fetched over SSH at completion time, so each `<TAB>` opens a brief
-connection.
+`pds` generates shell registration scripts backed by its dynamic completion engine.
+Keep `pds` on `PATH` after installing them. Bucket names, paths, and `exec` script
+names are fetched over SSH when completing a remote argument. Command and option
+completion uses the local CLI definition.
 
 ```sh
 source <(pds completion bash)        # bash, current shell
@@ -247,10 +257,40 @@ pds completion zsh > "${fpath[1]}/_pds"            # zsh (then restart the shell
 
 ## Building
 
+Building requires Rust 1.89 or newer, Cargo, and a C compiler and linker for native
+dependencies.
+
+```sh
+cargo build --release --locked
 ```
-go build ./...
-go test ./...
+
+The binaries are `target/release/pds` and `target/release/pdsd`. `make build` builds
+both release binaries and copies them to `bin/`.
+
+Run Rust tests with `cargo test`. `make check` runs the full required checks,
+including binary compatibility tests. The full check requires Rust's `rustfmt` and
+`clippy` components and `cargo-deny`. Compatibility tests also require Python 3 and
+OpenSSH's `ssh-keygen`; Go is not required.
+
+To run the compatibility tests directly:
+
+```sh
+cargo build --locked
+PDS_BIN=./target/debug/pds PDSD_BIN=./target/debug/pdsd python3 tests/compat.py
 ```
+
+Optionally set `PDS_REFERENCE_BIN` and `PDSD_REFERENCE_BIN` to existing external
+reference executables. Every supplied client runs against every supplied server,
+including mixed pairs. Use `-k` to select tests, such as
+`python3 tests/compat.py -k http`, with the same binary environment variables.
+
+To build static Linux releases for both architectures, install Rust's
+`x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` targets, Clang, a host C
+toolchain and binutils, Bash, GNU tar, gzip, and coreutils. Run
+`scripts/build-release.sh` with no arguments. It uses Rust's bundled `rust-lld` and
+writes `dist/pds-linux-x86_64.tar.gz` and `dist/pds-linux-arm64.tar.gz`, each
+containing `pds` and `pdsd`. `SOURCE_DATE_EPOCH` sets the archive timestamp and
+defaults to `0`.
 
 ## Security notes
 
@@ -258,16 +298,17 @@ go test ./...
 - Client failover handles unavailable endpoints only. It never bypasses an untrusted
   host key or a server that rejects both configured and anonymous authentication.
 - By default every connection requires an authorized client key; reads and pushes both
-  require it. Enabling `allowAnonymous` opens reads to keyless clients but never writes —
-  anonymous connections cannot push and have no host identity.
+  require it. Enabling `allowAnonymous` opens reads to keyless clients. Anonymous
+  connections cannot push and have no host identity.
 - `httpListen` exposes reads over unauthenticated plain HTTP (no host-key pinning); it is
   read-only and requires `allowAnonymous`. Treat it as making bucket contents public.
-- All paths are confined to their bucket; symlinks that escape are rejected.
+- PDS follows operator-created symlinks for reads and upload directories, including
+  targets outside a bucket.
 - A pushed file's extension is dictated by the bucket, never the client.
 - Pushes are validated, written to a temp file, and atomically renamed, so a partial
   or invalid upload never becomes `latest`. Validation (json/yaml) is serialized
   through a single worker so concurrent pushes can't multiply validation memory.
-- Pushes are capped at 5 MiB — PDS is for small files. Validators read from the temp
+- Pushes are capped at 5 MiB. PDS is for small files. Validators read from the temp
   file: `json` requires exactly one document, `jsonl` requires one JSON value per
   line, `yaml` decodes per document.
 - `byHost` push isolation is inherent: the host comes from the auth key and only

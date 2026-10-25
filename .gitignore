@@ -1,14 +1,17 @@
-# Built binaries
+# Build and release output
 /pds
 /pdsd
 /bin/
-
-# Go
-*.test
-*.out
-
-# Release artifacts
+/target/
 /dist/
+/*.pkg.tar.*
+/*.src.tar.*
+/pds-*.tar.gz
 
-# Toby sandbox config
+# Local and test artifacts
+/tests/__pycache__/
+/.tmp/
+/tmp/
+*.out
+coverage.*
 .toby.yaml

@@ -1,5 +1,3 @@
-# Maintainer: Ryan Petris <ryan@petris.net>
-#
 # Local-testing PKGBUILD. The source tarball is produced from the working tree
 # by ./build-local.sh (which also sets PDS_PKGVER); integrity checks are
 # intentionally skipped (sha256sums=SKIP) because the tarball is regenerated on
@@ -8,27 +6,35 @@
 pkgname=pds
 pkgver="${PDS_PKGVER:-0.0.0}"
 pkgrel=1
-pkgdesc="Petris Distribution System — SSH/SFTP file distribution, script runner, and validated uploads"
+pkgdesc="PDS SSH/SFTP file distribution, script runner, and validated uploads"
 arch=('x86_64')
 url="https://petris.dev/pds"
 license=('MIT')
-makedepends=('go')
-# Pure-Go, CGO-free static binaries: no debug package to extract.
-options=('!debug')
+depends=('glibc' 'gcc-libs')
+makedepends=('rust')
+# The release profile strips symbols.
+# Rust's lld cannot link ring's C objects with GCC LTO.
+options=('!debug' '!lto')
 source=("$pkgname-$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 build() {
 	cd "$srcdir/$pkgname-$pkgver"
-	# -trimpath strips the build $srcdir from the binaries (reproducible, and
-	# silences makepkg's "reference to $srcdir" check). go picks GOFLAGS up
-	# automatically; the Makefile supplies CGO_ENABLED=0.
-	export GOFLAGS="-trimpath"
+	if [[ ! -v CARGO_ENCODED_RUSTFLAGS ]]; then
+		CARGO_ENCODED_RUSTFLAGS=
+		# Cargo splits RUSTFLAGS on spaces and trims each argument.
+		while IFS= read -r -d ' ' flag || [[ -n $flag ]]; do
+			flag=${flag#"${flag%%[![:space:]]*}"}
+			flag=${flag%"${flag##*[![:space:]]}"}
+			if [[ -n $flag ]]; then
+				CARGO_ENCODED_RUSTFLAGS+="${CARGO_ENCODED_RUSTFLAGS:+$'\x1f'}$flag"
+			fi
+		done <<< "${RUSTFLAGS:-}"
+	fi
+	export CARGO_ENCODED_RUSTFLAGS="${CARGO_ENCODED_RUSTFLAGS:+$CARGO_ENCODED_RUSTFLAGS$'\x1f'}--remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
 	make build
 
-	# Shell completions, generated from the freshly built client. `pds
-	# completion` emits a static script (no server/network needed); it calls
-	# back into `pds __complete` at runtime for live data.
+	# Completion scripts query the client for live data at runtime.
 	./bin/pds completion bash >completion.bash
 	./bin/pds completion zsh >completion.zsh
 }

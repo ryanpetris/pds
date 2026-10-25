@@ -1,0 +1,14 @@
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "RSA supports existing SSH key parsing and signing. PDS does not use RSA decryption or depadding. Remove this exception when RSA parsing no longer needs the affected dependency." },
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "BSD-3-Clause",
+    "Apache-2.0",
+    "ISC",
+    "Unicode-3.0",
+    "Apache-2.0 WITH LLVM-exception",
+]

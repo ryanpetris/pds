@@ -1,25 +1,29 @@
-# Keep the build context (and the Arch package build, see packaging/arch/Dockerfile)
-# lean. NOTE: .git is intentionally NOT ignored — packaging/arch/build-local.sh
-# derives the package version from the git revision.
+# Keep .git for the package version derived by build-local.sh.
 
-# Build output
+# Build and release output
 /pds
 /pdsd
 /bin/
+/target/
 /dist/
 
-# Arch package build artifacts
+# Arch package artifacts
 /packaging/arch/pkg/
 /packaging/arch/src/
 /packaging/arch/pds-*.tar.gz
 /packaging/arch/*.pkg.tar.*
 /*.pkg.tar.*
+/*.src.tar.*
+/pds-*.tar.gz
 
-# Local / test artifacts
+# Local and test artifacts
+/.tmp/
+/tmp/
+**/__pycache__/
 *.out
 coverage.*
 .toby.yaml
 
-# Editors / IDEs
+# Editors
 .idea/
 .vscode/
